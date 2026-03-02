@@ -56,7 +56,22 @@ Available directly in the Arduino Library Manager:
 3. Install
 
 ---
+## MPU6050 Calibration
 
+Before running the PID controller, the **MPU6050 must be calibrated** to obtain accurate sensor offsets.  
+This project uses the calibration method from:
+
+https://github.com/gttealainctorw/MPU6050-Calibration-Module
+
+### Steps
+
+1. Connect the MPU6050 to the Arduino.
+2. Place the sensor on a flat, stable surface.
+3. Upload the calibration sketch from the repository above.
+4. Open the Serial Monitor and wait for calibration to finish.
+5. Copy the generated offsets into this project.
+
+> Calibration is required only once unless the sensor or hardware setup changes.
 ## First Run
 Open the Serial Monitor at **11200 baudios**. You should see:
 ```
@@ -67,6 +82,6 @@ If you see `MPU6050 connection failed. Check wiring.` — verify your I2C wiring
 ---
 
 ## Notes
-- The gyroscope offsets in the code are specific to the original sensor. If your robot doesn't balance correctly, you may need to recalibrate them using the i2cdevlib calibration tool.
+- The gyroscope offsets in the code are specific to the original sensor. If your robot doesn't balance correctly, you may need to recalibrate them using the i2cdevlib calibration tool. 
 - `BalancePoint = 180` depends on how the sensor is physically mounted on the robot.
 - PID values may need tuning depending on your robot's weight, motors, and wheels.
