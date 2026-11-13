@@ -110,6 +110,7 @@ Moving **sideways** is not possible: a two-wheeled robot can only go forward, ba
 | `mt` · `ramp` · `ok` · `stop` | Motor test · minimum-PWM ramp · confirm · cancel |
 | `invl` · `invr` | Reverse the left / right motor |
 | `i2c` | Scan the I2C bus (wiring check) |
+| `wifi` | Nano ESP32 radio check: TX power and the networks the robot can hear |
 | `tel 1` / `tel 0` | Telemetry for the Serial Plotter |
 | `d 0.5 0.2` | Drive command: forward and turn (−1..1) for 0.6 s |
 
@@ -162,6 +163,7 @@ Both balance with the same algorithm. **Recommended: Nano ESP32**:
 | Symptom | Likely cause |
 |---|---|
 | Nano ESP32: `No DFU capable USB device` or `Cannot open DFU device` when uploading | The Windows DFU driver is missing. In the IDE: *Boards Manager → "Arduino ESP32 Boards" (by Arduino) → Install* and accept the driver installation. Then unplug and replug the USB cable |
+| Nano ESP32 shows up as **"ESP32 Family Device"** on another COM port, and DFU upload fails (`exit status 74`) | The board is in the ROM bootloader. Press its RESET button once, or upload with *Tools → Programmer → Esptool* + *Sketch → Upload Using Programmer* on that port |
 | `ERROR: MPU6050 not found` / `imu=ERROR` | SDA/SCL swapped, missing GND, or VCC on the Nano ESP32's 5V/VBUS terminal without USB. Run `i2c`: it should list `0x68` |
 | The angle increases when you tilt it backwards | Repeat `calfwd`, tilting it towards the side you want to be forward |
 | The wheels push towards the side it is falling to (making it worse) | Motors reversed: `mt`, then `invl` / `invr` |

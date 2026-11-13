@@ -129,6 +129,7 @@ const uint16_t CAL_SAMPLES_ACC  = 200;  // 1 s
   uint16_t msgPrinted = 0;
   WebServer server(80);
   char apSsid[24];
+  bool apStarted = false;
 #else
   uint32_t nextTick = 0;
 #endif
@@ -613,6 +614,11 @@ void printInfo(Print& out) {
   out.print(F("WiFi: network '")); out.print(apSsid);
   out.print(F("' password '"));     out.print(AP_PASSWORD);
   out.println(F("' -> http://192.168.4.1"));
+  out.print(F("WiFi AP: ")); out.print(apStarted ? F("running") : F("FAILED"));
+  out.print(F(" mode="));    out.print((int)WiFi.getMode());
+  out.print(F(" ip="));      out.print(WiFi.softAPIP());
+  out.print(F(" channel=")); out.print(WiFi.channel());
+  out.print(F(" clients=")); out.println(WiFi.softAPgetStationNum());
 #endif
 }
 
@@ -664,6 +670,21 @@ void handleCommand(char* line, Print& out) {
   }
   if (!strcmp(cmd, "ok"))   { if (mode == MODE_RAMP) rampOkReq = true; return; }
   if (!strcmp(cmd, "i2c"))  { reqScan = true; return; }
+#if HAS_WIFI
+  if (!strcmp(cmd, "wifi")) {   // radio check: TX power and networks the robot can hear
+    if (WiFi.getMode() != WIFI_AP_STA) WiFi.mode(WIFI_AP_STA);
+    out.print(F("TX power (x0.25 dBm): ")); out.println((int)WiFi.getTxPower());
+    int n = WiFi.scanNetworks();
+    out.print(F("Networks heard by the robot: ")); out.println(n);
+    for (int i = 0; i < n && i < 6; i++) {
+      out.print(F("  ")); out.print(WiFi.SSID(i));
+      out.print(F("  ")); out.print(WiFi.RSSI(i));
+      out.print(F(" dBm  ch")); out.println(WiFi.channel(i));
+    }
+    WiFi.scanDelete();
+    return;
+  }
+#endif
   if (!strcmp(cmd, "stop")) { reqMode = MODE_IDLE; out.println(F("Stopped")); return; }
   if (!strcmp(cmd, "invl")) { P.invL = !P.invL; out.print(F("invl=")); out.println(P.invL); return; }
   if (!strcmp(cmd, "invr")) { P.invR = !P.invR; out.print(F("invr=")); out.println(P.invR); return; }
@@ -793,7 +814,7 @@ void wifiSetup() {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);   // unique per board (read from eFuse)
   snprintf(apSsid, sizeof(apSsid), "%s-%02X%02X", AP_SSID_PREFIX, mac[4], mac[5]);
-  WiFi.softAP(apSsid, AP_PASSWORD);
+  apStarted = WiFi.softAP(apSsid, AP_PASSWORD, AP_CHANNEL);
   WiFi.setSleep(false);
   server.on("/", handleRoot);
   server.on("/j", handleJoy);
@@ -801,6 +822,7 @@ void wifiSetup() {
   server.on("/s", handleState);
   server.onNotFound([]() { server.send(404, "text/plain", "not found"); });
   server.begin();
+  if (!apStarted) report(F("ERROR: the WiFi access point did not start"));
   Serial.printf("WiFi: join '%s' (password '%s') and open http://%s\n", apSsid, AP_PASSWORD,
                 WiFi.softAPIP().toString().c_str());
 }
@@ -834,6 +856,11 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 
 #if HAS_WIFI
+  #if defined(ARDUINO_USB_MODE) && (ARDUINO_USB_MODE == 0) && ARDUINO_USB_CDC_ON_BOOT
+  // A serial terminal toggling DTR/RTS must never reboot the robot into the
+  // ROM bootloader while it balances. Uploads use DFU, which does not need this.
+  Serial.enableReboot(false);
+  #endif
   EEPROM.begin(256);
   uint32_t t0 = millis();
   while (!Serial && millis() - t0 < 1500) delay(10);   // short wait for USB
