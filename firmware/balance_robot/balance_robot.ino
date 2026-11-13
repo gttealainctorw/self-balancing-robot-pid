@@ -120,6 +120,22 @@ int16_t  calRef[3];
 const uint16_t CAL_SAMPLES_GYRO = 400;  // 2 s
 const uint16_t CAL_SAMPLES_ACC  = 200;  // 1 s
 
+// autotune: pattern search on kp, kd, ks while the robot balances
+const uint16_t AT_WIN  = 4 * LOOP_HZ;    // ticks per evaluation (4 s)
+const uint16_t AT_SKIP = 1 * LOOP_HZ;    // ignore the first second after (re)starting
+const float AT_REF[3] = {45.0f, 0.6f, 20.0f};   // scale for steps when a gain is small
+const float AT_LO[3]  = {10.0f, 0.0f, 0.0f};
+const float AT_HI[3]  = {150.0f, 5.0f, 60.0f};
+const float AT_RESCUE[4] = {1.5f, 0.67f, 2.0f, 0.5f};  // tried when the start gains cannot balance
+volatile bool atReqStart = false, atReqStop = false;
+volatile bool atOn = false;
+uint8_t  atPi = 0, atTrial = 0, atBaseFalls = 0, atRescue = 0;
+bool     atImproved = false;
+float    atStep = 0.25f, atJbase = -1.0f;
+float    atBase[3], atOrig[3];
+uint16_t atN = 0, atSkip = 0;
+float    atSE = 0, atSDu = 0, atSV = 0, atSSat = 0;
+
 #if HAS_WIFI
   // On the ESP32 the control loop runs in its own task: messages are queued
   // here and printed by loop(), so the control loop never waits on USB/WiFi.
@@ -347,6 +363,136 @@ void calStep(const int16_t* raw) {
 }
 
 // ---------------------------------------------------------------------
+//  Autotune
+//  While balancing, each set of gains is scored for 4 s with
+//    J = rms(angle error) + 0.04·rms(ΔPWM) + 3·rms(vEst) + 5·saturation
+//  (small error, no jitter, no drift, no saturation). One gain at a time is
+//  moved up or down; changes that lower J by > 7 % are kept. A fall counts as
+//  J = ∞. When no gain improves, the step is halved; below 6 % it stops.
+// ---------------------------------------------------------------------
+void reportGains(const char* prefix) {
+  char b[72], s1[10], s2[10], s3[10];
+  dtostrf(P.kp, 1, 1, s1);
+  dtostrf(P.kd, 1, 2, s2);
+  dtostrf(P.ks, 1, 1, s3);
+  snprintf(b, sizeof(b), "%s kp=%s kd=%s ks=%s", prefix, s1, s2, s3);
+  report(b);
+}
+
+void atApply(const float* v) { P.kp = v[0]; P.kd = v[1]; P.ks = v[2]; }
+
+void atResetWindow() {
+  atN = 0;
+  atSE = atSDu = atSV = atSSat = 0;
+  atSkip = AT_SKIP;
+}
+
+void atTrialValues(int8_t sign, float* v) {
+  for (uint8_t i = 0; i < 3; i++) v[i] = atBase[i];
+  float span = atBase[atPi] > 0.5f * AT_REF[atPi] ? atBase[atPi] : 0.5f * AT_REF[atPi];
+  v[atPi] = constrain(atBase[atPi] + sign * atStep * span, AT_LO[atPi], AT_HI[atPi]);
+}
+
+void atStart() {
+  atOrig[0] = P.kp; atOrig[1] = P.kd; atOrig[2] = P.ks;
+  for (uint8_t i = 0; i < 3; i++) atBase[i] = atOrig[i];
+  atStep = 0.25f; atPi = 0; atTrial = 0; atJbase = -1.0f;
+  atImproved = false; atBaseFalls = 0; atRescue = 0;
+  atResetWindow();
+  atOn = true;
+  report(F("Autotune ON: let it balance; stand it up again whenever it falls (~2-6 min)"));
+}
+
+void atFinish(bool ok) {
+  atOn = false;
+  if (ok) {
+    atApply(atBase);
+    reportGains("Autotune done:");
+    report(F("Send 'off' and then 'save' to keep these gains"));
+  } else {
+    atApply(atOrig);
+    report(F("Autotune gave up: check motor direction (mt), minpwm and battery"));
+  }
+}
+
+void atNextParam() {
+  atPi = (atPi + 1) % 3;
+  if (atPi == 0) {
+    if (!atImproved) {
+      atStep *= 0.5f;
+      if (atStep < 0.06f) { atFinish(true); return; }
+    }
+    atImproved = false;
+    atTrial = 0;              // re-score the base at the start of each round
+    atJbase = -1.0f;
+    atApply(atBase);
+    return;
+  }
+  float v[3];
+  atTrialValues(+1, v);
+  atTrial = 1;
+  atApply(v);
+}
+
+void atEvaluate(float J) {
+  if (atTrial == 0) {                         // scoring the current best gains
+    if (isinf(J)) {
+      if (++atBaseFalls >= 2) {               // they cannot balance: try a bolder set
+        if (atRescue >= 4) { atFinish(false); return; }
+        float f = AT_RESCUE[atRescue++];
+        atBaseFalls = 0;
+        atBase[0] = constrain(atOrig[0] * f, AT_LO[0], AT_HI[0]);
+        atBase[1] = constrain(atOrig[1] * f, AT_LO[1], AT_HI[1]);
+        atBase[2] = atOrig[2] > 15.0f ? atOrig[2] : 15.0f;
+        atApply(atBase);
+        reportGains("Autotune rescue:");
+      }
+      return;
+    }
+    atBaseFalls = 0;
+    atJbase = J;
+    float v[3];
+    atTrialValues(+1, v);
+    atTrial = 1;
+    atApply(v);
+    return;
+  }
+  if (!isinf(J) && J < atJbase * 0.93f) {     // this change helps: keep it
+    atBase[0] = P.kp; atBase[1] = P.kd; atBase[2] = P.ks;
+    atJbase = J;
+    atImproved = true;
+    reportGains("Autotune better:");
+    atNextParam();
+    return;
+  }
+  if (atTrial == 1) {                         // up did not help: try down
+    float v[3];
+    atTrialValues(-1, v);
+    atTrial = 2;
+    atApply(v);
+    return;
+  }
+  atApply(atBase);
+  atNextParam();
+}
+
+void atTick(float err, float u) {
+  if (atSkip) { atSkip--; return; }
+  float du = u - uOut;
+  atN++;
+  atSE += err * err;
+  atSDu += du * du;
+  atSV += vEst * vEst;
+  if (fabsf(u) >= 250.0f) atSSat += 1.0f;
+  if (atN >= AT_WIN) {
+    float n = atN;
+    float J = sqrtf(atSE / n) + 0.04f * sqrtf(atSDu / n) + 3.0f * sqrtf(atSV / n) + 5.0f * atSSat / n;
+    atEvaluate(J);
+    atResetWindow();
+  }
+}
+
+// ---------------------------------------------------------------------
 //  Loop modes
 // ---------------------------------------------------------------------
 void startRun() {
@@ -354,6 +500,7 @@ void startRun() {
   rateF = 0; driveSm = 0; turnSm = 0; armTicks = 0;
   fallen = false;
   mode = MODE_RUN;
+  if (atOn) atResetWindow();
   report(F("Balancing"));
 }
 
@@ -380,6 +527,7 @@ void runStep() {
     mode = MODE_IDLE;
     fallen = true;
     armTicks = 0;
+    if (atOn) { atEvaluate(INFINITY); atResetWindow(); }
     report(F("Fallen: motors off. Stand it upright to resume"));
     return;
   }
@@ -394,6 +542,7 @@ void runStep() {
   iTerm = constrain(iTerm + P.ki * err * DT, -I_TERM_LIMIT, I_TERM_LIMIT);
   float u = P.kp * err + iTerm + P.kd * rateF;
   u = constrain(u, -255.0f, 255.0f);
+  if (atOn) atTick(err, u);
   uOut = u;
 
   float tr = turnSm * P.turn;
@@ -488,6 +637,11 @@ void controlStep() {
     reqScan = false;
     if (mode != MODE_RUN) i2cScanReport();
   }
+  if (atReqStart) { atReqStart = false; if (!atOn) atStart(); }
+  if (atReqStop) {
+    atReqStop = false;
+    if (atOn) { atOn = false; atApply(atBase); reportGains("Autotune stopped, best so far:"); }
+  }
 
   // Without a working IMU: motors off and retry once per second (instead of
   // 200 times per second) so a missing sensor never stalls the loop.
@@ -544,7 +698,7 @@ void controlStep() {
 
   // 2) Drive command (with watchdog and slew limit)
   float dc = driveCmd, tc = turnCmd;
-  if (millis() - lastCmdMs > CMD_TIMEOUT_MS) { dc = 0; tc = 0; }
+  if (atOn || millis() - lastCmdMs > CMD_TIMEOUT_MS) { dc = 0; tc = 0; }  // no driving while autotuning
   driveSm += constrain(dc - driveSm, -DRIVE_SLEW * DT, DRIVE_SLEW * DT);
   turnSm  += constrain(tc - turnSm,  -TURN_SLEW * DT,  TURN_SLEW * DT);
 
@@ -586,6 +740,7 @@ void printHelp(Print& out) {
   out.println(F(" d 0.5 0             drive: forward -1..1, turn -1..1 (0.6 s)"));
   out.println(F(" stop                cancel calibration or test"));
   out.println(F(" i2c                 scan the I2C bus (wiring check)"));
+  out.println(F(" autotune [stop]     self-tune kp, kd, ks while it balances"));
 }
 
 void printParams(Print& out) {
@@ -605,6 +760,7 @@ void printInfo(Print& out) {
   out.print(F("mode="));      out.print(modeName(mode));
   out.print(F(" balance="));  out.print(motorsEnabled ? F("on") : F("off"));
   out.print(F(" imu="));      out.print(imuOk ? F("ok") : F("ERROR"));
+  out.print(F(" autotune="));  out.print(atOn ? F("on") : F("off"));
   out.print(F(" angle="));    out.print(angle, 2);
   out.print(F(" target="));   out.print(tgt, 2);
   out.print(F(" rate="));     out.print(rate, 1);
@@ -639,7 +795,23 @@ void handleCommand(char* line, Print& out) {
   if (!strcmp(cmd, "get"))  { printParams(out); return; }
   if (!strcmp(cmd, "info")) { printInfo(out); return; }
   if (!strcmp(cmd, "on"))   { motorsEnabled = true;  out.println(F("Balancing enabled: stand it upright")); return; }
-  if (!strcmp(cmd, "off"))  { motorsEnabled = false; out.println(F("Balancing disabled")); return; }
+  if (!strcmp(cmd, "off"))  {
+    motorsEnabled = false;
+    if (atOn) atReqStop = true;
+    out.println(F("Balancing disabled"));
+    return;
+  }
+  if (!strcmp(cmd, "autotune") || !strcmp(cmd, "at")) {
+    if (a1 && (!strcmp(a1, "stop") || !strcmp(a1, "off") || !strcmp(a1, "0"))) {
+      atReqStop = true;
+      out.println(F("Stopping autotune"));
+    } else {
+      motorsEnabled = true;
+      atReqStart = true;
+      out.println(F("Autotune starting: stand the robot upright and let go"));
+    }
+    return;
+  }
   if (!strcmp(cmd, "tel")) {
     telemetryOn = a1 ? (atoi(a1) != 0) : !telemetryOn;
     out.println(telemetryOn ? F("Telemetry ON") : F("Telemetry OFF"));
@@ -705,6 +877,10 @@ void handleCommand(char* line, Print& out) {
           out.println(PDEF[i].hi, 3);
           return;
         }
+        if (atOn && (PDEF[i].ptr == &P.kp || PDEF[i].ptr == &P.kd || PDEF[i].ptr == &P.ks)) {
+          atOn = false;
+          out.println(F("Autotune stopped (manual change)"));
+        }
         *PDEF[i].ptr = v;
       }
       out.print(PDEF[i].name);
@@ -769,9 +945,9 @@ String telemetryJson() {
   char b[300];
   snprintf(b, sizeof(b),
            "{\"a\":%.2f,\"t\":%.2f,\"r\":%.1f,\"u\":%.1f,\"v\":%.3f,\"at\":%.2f,"
-           "\"m\":\"%s\",\"e\":%d,\"imu\":%d,\"rp\":%d,\"lu\":%u,\"sq\":%u,\"msg\":\"%s\"}",
+           "\"m\":\"%s\",\"e\":%d,\"imu\":%d,\"tune\":%d,\"rp\":%d,\"lu\":%u,\"sq\":%u,\"msg\":\"%s\"}",
            angle, tgt, rate, uOut, vEst, autoTrim, modeName(mode), motorsEnabled ? 1 : 0,
-           imuOk ? 1 : 0, rampPwm, (unsigned)loopUs, (unsigned)h, lastMsg);
+           imuOk ? 1 : 0, atOn ? 1 : 0, rampPwm, (unsigned)loopUs, (unsigned)h, lastMsg);
   return String(b);
 }
 

@@ -45,7 +45,9 @@ input[type=range]{width:100%}input[type=number]{width:100%;padding:6px;backgroun
 <div class="leg"><i style="background:#4f8cff"></i>angle<i style="background:#f0a020"></i>target<i style="background:#2fbf71"></i>PWM/10</div></section>
 
 <section class="card"><h2>Live tuning</h2><div id="prms"></div>
-<div class="row"><button id="bsave" class="pri">Save</button><button id="bload">Reload</button><button id="bdef">Default PID</button></div></section>
+<div class="row"><button id="bsave" class="pri">Save</button><button id="bload">Reload</button><button id="bdef">Default PID</button></div>
+<div class="row" style="margin-top:8px"><button id="btune">Auto-tune</button></div>
+<p class="leg">Auto-tune tries gains while it balances and keeps the best ones (2–6 min). Stand it up again each time it falls, then Save.</p></section>
 
 <section class="card"><h2>Calibration (in this order the first time)</h2>
 <div class="row"><button data-c="calg">1 · Gyro<br><small>keep still</small></button>
@@ -84,10 +86,12 @@ w.innerHTML=`<label>${k}</label><input type=range min=${lo} max=${hi} step=${st}
 const[r,n]=w.querySelectorAll('input');inputs[k]=[r,n];
 const send=v=>{clearTimeout(tmr[k]);tmr[k]=setTimeout(()=>cmd(k+' '+v),150)};
 r.oninput=()=>{n.value=r.value;send(r.value)};n.onchange=()=>{r.value=n.value;send(n.value)};box.appendChild(w)}
+let firstLoad=1;
 async function loadState(){try{const s=await(await fetch('/s')).json();for(const k in inputs)if(k in s.p){inputs[k][0].value=s.p[k];inputs[k][1].value=+s.p[k].toFixed(4)}
-document.title=s.ssid;log('Connected to '+s.ssid+' · firmware '+s.fw)}catch(e){setTimeout(loadState,1000)}}
+document.title=s.ssid;if(firstLoad){log('Connected to '+s.ssid+' · firmware '+s.fw);firstLoad=0}}catch(e){setTimeout(loadState,1000)}}
 $('bsave').onclick=()=>cmd('save');$('bload').onclick=async()=>{await cmd('load');loadState()};$('bdef').onclick=async()=>{await cmd('reset');loadState()};
 $('bon').onclick=()=>cmd('on');$('boff').onclick=()=>cmd('off');
+let tuning=0,tunePolls=0;$('btune').onclick=()=>cmd(tuning?'autotune stop':'autotune');
 document.querySelectorAll('[data-c]').forEach(b=>b.onclick=async()=>{await cmd(b.dataset.c);if(b.dataset.c=='ok')setTimeout(loadState,300)});
 // joystick
 let jx=0,jy=0;const joy=$('joy'),kn=$('knob');
@@ -113,6 +117,7 @@ async function poll(){try{const r=await fetch(`/j?v=${dz(jy).toFixed(2)}&t=${dz(
 $('ang').textContent=d.a.toFixed(1);$('tg').textContent=d.t.toFixed(1);$('pw').textContent=d.u.toFixed(0);$('lu').textContent=d.lu;
 const st=$('st');st.textContent=d.imu?d.m:'MPU error!';st.className='pill '+(!d.imu?'er':d.m=='balancing'?'ok':d.m=='fallen'?'er':'wa');
 const en=$('en');en.textContent=d.e?'balance ON':'balance OFF';en.className='pill '+(d.e?'ok':'');
+if(d.tune){if(++tunePolls%20==0)loadState()}else if(tuning)loadState();tuning=d.tune;const bt=$('btune');bt.textContent=tuning?'Stop auto-tune':'Auto-tune';bt.className=tuning?'dan':'';if(tuning)st.textContent='auto-tuning';
 if(d.sq!=lastSq){if(lastSq>=0&&d.msg)log(d.msg);lastSq=d.sq}
 H.a.push(d.a);H.t.push(d.t);H.u.push(d.u/10);for(const k in H)if(H[k].length>N)H[k].shift();draw()}
 catch(e){if(++fails==3){$('st').textContent='no connection';$('st').className='pill er'}}

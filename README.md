@@ -82,6 +82,22 @@ Everything changes live: `kp 50`, `kd 0.8`, `trim -0.3`… Send `off` and then `
 
 > **Before touching the robot,** try the gains in `matlab/simulate_robot.m`: it is much faster and breaks nothing.
 
+### Autotune (let the robot tune itself)
+
+Press **Auto-tune** in the app (or send `autotune`). While it balances, the robot scores each set of gains for 4 s:
+
+```
+J = rms(angle error) + 0.04·rms(PWM change per step) + 3·rms(speed estimate) + 5·(time saturated)
+```
+
+That means small tilt, no jitter, no drift and no saturation. It changes `kp`, `kd` and `ks` one at a time, keeps a change only if `J` drops by more than 7 %, and halves the step when nothing helps. It finishes in about **2–6 minutes**.
+
+- **Requirements:** calibration done, motors turning the right way (`mt`) and `minpwm` measured. Autotune can't fix wiring or reversed motors.
+- **It will fall sometimes:** a fall counts as a bad score. Stand it up again and hold it still until the motors engage; it carries on by itself.
+- **If the starting gains can't balance at all,** it tries bolder sets (×1.5, ×0.67, ×2, ×0.5). If none works, it stops and tells you to check motors, `minpwm` and battery.
+- **The joystick is ignored while tuning.** Changing `kp`, `kd` or `ks` by hand, or pressing **OFF**, stops it.
+- **When it says `Autotune done`,** press **OFF** and then **Save**.
+
 ## 5. WiFi app (Nano ESP32)
 
 1. Power the robot on. It creates a network called **`BalanceBot-XXXX`**, password **`balance123`** (you can change it in `config.h`). The exact name is shown by the `info` command.
@@ -91,7 +107,7 @@ Everything changes live: `kp 50`, `kd 0.8`, `trim -0.3`… Send `off` and then `
 The app works in any browser (Android, iPhone or PC) and needs no installation:
 
 - **Joystick:** up = forward, down = backward, sides = turn. On a PC the arrow keys or WASD work too. The robot leans only as much as needed to reach the requested speed, and brakes on its own when you let go.
-- **Live tuning** of every parameter with sliders, plus *Save / Reload / Default PID*.
+- **Live tuning** of every parameter with sliders, plus *Save / Reload / Default PID* and **Auto-tune**.
 - **Plot** of angle, target and PWM over the last 20 s.
 - **Calibration and test buttons** (the same steps as section 3).
 - **Safety:** if the app stops sending commands for 0.6 s (page closed or WiFi lost), the drive command returns to 0.
@@ -109,6 +125,7 @@ Moving **sideways** is not possible: a two-wheeled robot can only go forward, ba
 | `calg` · `calup` · `calfwd` | Calibrate gyro · upright · forward |
 | `mt` · `ramp` · `ok` · `stop` | Motor test · minimum-PWM ramp · confirm · cancel |
 | `invl` · `invr` | Reverse the left / right motor |
+| `autotune` / `autotune stop` | Self-tune `kp`, `kd`, `ks` while it balances (see section 4) |
 | `i2c` | Scan the I2C bus (wiring check) |
 | `wifi` | Nano ESP32 radio check: TX power and the networks the robot can hear |
 | `tel 1` / `tel 0` | Telemetry for the Serial Plotter |
