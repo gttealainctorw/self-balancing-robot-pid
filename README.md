@@ -190,6 +190,3 @@ Both balance with the same algorithm. **Recommended: Nano ESP32**:
 | It vibrates fast | `kp` or `kd` too high, or `minpwm` too high. Loose MPU mounting |
 | I cannot see the WiFi network | Only the Nano ESP32 has WiFi; the Serial Monitor (`info`) shows the network name |
 
-## Credits
-
-Based on the idea and schematic of [adoodevv/self_balancing_robot](https://github.com/adoodevv/self_balancing_robot) (MIT). The firmware, app and simulation in this repository were rewritten from scratch.
