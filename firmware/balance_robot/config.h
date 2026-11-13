@@ -75,3 +75,4 @@
 // ---------------------------------------------------------------------
 #define AP_SSID_PREFIX "BalanceBot"   // 4 unique hex digits are appended
 #define AP_PASSWORD    "balance123"   // at least 8 characters
+#define AP_CHANNEL     6              // 2.4 GHz channel (1-13)
