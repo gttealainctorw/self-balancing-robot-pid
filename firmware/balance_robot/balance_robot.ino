@@ -103,6 +103,8 @@ float angle = 0, rate = 0, rateF = 0, tgt = 0, uOut = 0;
 float vEst = 0, autoTrim = 0, iTerm = 0, driveSm = 0, turnSm = 0;
 bool  angleInit = false;
 uint16_t armTicks = 0;
+uint16_t runTicks = 0;      // ticks since balancing started (soft start of the speed loop)
+uint16_t satTicks = 0;      // consecutive saturated ticks while nearly upright (latch breaker)
 uint16_t imuRetryTicks = 0;
 uint8_t  i2cErrors = 0;
 uint16_t loopUs = 0;
@@ -498,6 +500,7 @@ void atTick(float err, float u) {
 void startRun() {
   iTerm = 0; vEst = 0; autoTrim = 0; uOut = 0;
   rateF = 0; driveSm = 0; turnSm = 0; armTicks = 0;
+  runTicks = 0; satTicks = 0;
   fallen = false;
   mode = MODE_RUN;
   if (atOn) atResetWindow();
@@ -531,17 +534,39 @@ void runStep() {
     report(F("Fallen: motors off. Stand it upright to resume"));
     return;
   }
-  // Outer loop: speed estimated from the applied PWM (no encoders)
-  vEst += (uOut / 255.0f - vEst) * DT / P.tauv;
+  // Outer loop: speed estimated from the applied PWM (no encoders).
+  // The estimate only means "speed" while the motors are not saturated, so it
+  // is frozen at full PWM; the loop also fades in over SOFT_START_MS.
+  if (fabsf(uOut) < SAT_PWM) vEst += (uOut / 255.0f - vEst) * DT / P.tauv;
+  if (runTicks < 60000) runTicks++;
+  float ramp = (float)runTicks / ((float)SOFT_START_MS * LOOP_HZ / 1000.0f);
+  float ks = P.ks * (ramp < 1.0f ? ramp : 1.0f);
   float vErr = driveSm * P.vmax - vEst;
   autoTrim = constrain(autoTrim + P.kis * vErr * DT, -P.lean, P.lean);
-  tgt = P.trim + constrain(autoTrim + P.ks * vErr, -P.lean, P.lean);
+  tgt = P.trim + constrain(autoTrim + ks * vErr, -P.lean, P.lean);
 
   // Inner loop: angle PID (D term uses the filtered gyro rate)
   float err = angle - tgt;
   iTerm = constrain(iTerm + P.ki * err * DT, -I_TERM_LIMIT, I_TERM_LIMIT);
   float u = P.kp * err + iTerm + P.kd * rateF;
   u = constrain(u, -255.0f, 255.0f);
+
+  // Latch breaker: full power for LATCH_MS while nearly upright cannot happen
+  // in free balancing (it would tip the robot over). It happens when the robot
+  // is held by hand or the wheels are blocked: the PWM-based speed estimate
+  // then feeds itself. Reset the outer loop so that, when released, the robot
+  // starts from a clean state instead of being thrown at full power.
+  if (fabsf(u) >= SAT_PWM && fabsf(angle - P.trim) < LATCH_ANGLE) {
+    if (++satTicks >= (uint16_t)((uint32_t)LATCH_MS * LOOP_HZ / 1000)) {
+      satTicks = 0;
+      vEst = 0; autoTrim = 0; iTerm = 0;
+      tgt = P.trim;
+      err = angle - tgt;
+      u = constrain(P.kp * err + P.kd * rateF, -255.0f, 255.0f);
+    }
+  } else {
+    satTicks = 0;
+  }
   if (atOn) atTick(err, u);
   uOut = u;
 
