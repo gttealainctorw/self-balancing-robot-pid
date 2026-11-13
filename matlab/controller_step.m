@@ -58,17 +58,37 @@ if abs(st.angle - c.trim) > c.FALL_ANGLE
     return
 end
 
-% 3) Outer loop: speed estimated from the applied PWM
-st.vEst = st.vEst + (st.u/255 - st.vEst)*dt/c.tauv;
+% 3) Outer loop: speed estimated from the applied PWM (frozen while the
+%    PWM is saturated) and faded in over SOFT_START_MS after starting
+if abs(st.u) < c.SAT_PWM
+    st.vEst = st.vEst + (st.u/255 - st.vEst)*dt/c.tauv;
+end
+st.runTicks = st.runTicks + 1;
+ks = c.ks*min(1, st.runTicks/(c.SOFT_START_MS/1000*c.LOOP_HZ));
 vErr = st.driveSm*c.vmax - st.vEst;
 st.autoTrim = sat(st.autoTrim + c.kis*vErr*dt, c.lean);
-st.tgt = c.trim + sat(st.autoTrim + c.ks*vErr, c.lean);
+st.tgt = c.trim + sat(st.autoTrim + ks*vErr, c.lean);
 
 % 4) Inner loop: angle PID (D term uses the filtered gyro rate)
 err = st.angle - st.tgt;
 st.iTerm = sat(st.iTerm + c.ki*err*dt, c.I_TERM_LIMIT);
 u = c.kp*err + st.iTerm + c.kd*st.rateF;
 u = sat(u, 255);
+
+% Latch breaker: saturated for LATCH_MS while nearly upright means the robot
+% is held or blocked -> reset the outer loop
+if abs(u) >= c.SAT_PWM && abs(st.angle - c.trim) < c.LATCH_ANGLE
+    st.satTicks = st.satTicks + 1;
+    if st.satTicks >= round(c.LATCH_MS/1000*c.LOOP_HZ)
+        st.satTicks = 0;
+        st.vEst = 0;  st.autoTrim = 0;  st.iTerm = 0;
+        st.tgt = c.trim;
+        err = st.angle - st.tgt;
+        u = sat(c.kp*err + c.kd*st.rateF, 255);
+    end
+else
+    st.satTicks = 0;
+end
 st.u = u;
 
 % 5) Differential turn + minimum-PWM compensation
@@ -81,6 +101,7 @@ end
 function st = start_run(st)
 st.iTerm = 0;  st.vEst = 0;  st.autoTrim = 0;  st.u = 0;
 st.rateF = 0;  st.driveSm = 0;  st.turnSm = 0;  st.armTicks = 0;
+st.runTicks = 0;  st.satTicks = 0;
 st.fallen = false;
 st.run = true;
 end

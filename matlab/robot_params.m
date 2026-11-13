@@ -54,6 +54,10 @@ c.ARM_ANGLE    = 3;     % automatic start (deg)
 c.I_TERM_LIMIT = 120;   % anti-windup (PWM)
 c.DRIVE_SLEW   = 1.5;   % slew rate of the drive command (1/s)
 c.TURN_SLEW    = 4;     % slew rate of the turn command (1/s)
+c.SAT_PWM      = 250;   % |PWM| counted as saturated
+c.SOFT_START_MS = 1500; % speed loop fades in over this time (ms)
+c.LATCH_MS     = 250;   % saturated this long while upright -> reset speed loop (ms)
+c.LATCH_ANGLE  = 6;     % "nearly upright" for the latch breaker (deg)
 
 c.kp     = 45;     % PWM / deg
 c.ki     = 0;      % PWM / (deg s)
