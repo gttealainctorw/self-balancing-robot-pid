@@ -1,0 +1,13 @@
+# Arduino / PlatformIO
+build/
+.pio/
+*.elf
+*.hex
+*.bin
+# MATLAB
+*.asv
+*.mat
+slprj/
+# OS
+.DS_Store
+Thumbs.db
