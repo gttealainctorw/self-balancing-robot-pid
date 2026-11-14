@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050506">
+<meta name="bb-model" content="{{robot.bin}}">
+<title>BalanceBot</title>
+<link rel="preload" href="{{geist.woff2}}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{app.css}}">
+</head>
+<body>
+<div class="backdrop" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="brand" href="/control" data-nav-link><span class="brand-mark" aria-hidden="true"></span>balancebot</a>
+  <nav class="seg glass" aria-label="Pages">
+    <a href="/control" data-nav="control" data-nav-link>Control</a>
+    <a href="/statistics" data-nav="statistics" data-nav-link>Statistics</a>
+  </nav>
+  <div class="top-right">
+    <span class="pill sim" id="sim-badge" hidden><span>Simulation</span></span>
+    <span class="pill link" id="link-pill" data-state="connecting"><i class="dot"></i><span id="link-text">Connecting</span><span id="link-ms" class="num"></span></span>
+    <button class="icon-btn glass" id="nav-lock" type="button" aria-pressed="false" title="Lock this page" data-only="control">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path class="shackle" d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+      <span class="sr">Lock navigation</span>
+    </button>
+  </div>
+</header>
+
+<!-- ===================== CONTROL ===================== -->
+<main id="page-control" class="page control">
+  <section class="strip glass" aria-label="Robot status">
+    <div class="stat wide"><span class="k">State</span><b id="s-mode">—</b></div>
+    <div class="stat"><span class="k">Pitch</span><b class="num"><span id="s-pitch">—</span><i>°</i></b></div>
+    <div class="stat"><span class="k">Target</span><b class="num"><span id="s-target">—</span><i>°</i></b></div>
+    <div class="stat"><span class="k">Pitch rate</span><b class="num"><span id="s-rate">—</span><i>°/s</i></b></div>
+    <div class="stat wide"><span class="k">Motor command L · R</span><b class="num"><span id="s-pwml">—</span><i>·</i><span id="s-pwmr">—</span><i>PWM</i></b></div>
+    <div class="stat"><span class="k">IMU</span><b id="s-imu">—</b></div>
+    <div class="stat"><span class="k">Battery</span><b id="s-batt" class="muted">Not instrumented</b></div>
+    <div class="stat"><span class="k">Loop</span><b class="num"><span id="s-loop">—</span><i>µs</i></b></div>
+  </section>
+
+  <section class="stage" aria-label="Digital twin">
+    <canvas id="twin" class="twin"></canvas>
+    <div class="hud">
+      <span class="k">Pitch</span>
+      <div class="hud-value num"><span id="hud-pitch">0.0</span><i>°</i></div>
+      <span class="hud-sub num">target <span id="hud-target">0.0</span>°</span>
+    </div>
+    <div class="banner glass" id="banner" hidden></div>
+    <p class="stage-note">Wheel motion is drawn from the motor command. The robot has no encoders.</p>
+    <div class="dock">
+      <button class="btn" id="btn-balance" type="button">Balance on</button>
+      <button class="btn estop" id="btn-estop" type="button"><span>E-STOP</span></button>
+      <button class="btn quiet" id="btn-setup" type="button">Setup</button>
+    </div>
+  </section>
+
+  <aside class="pilot" aria-label="Driving">
+    <div class="lock-card glass" id="lock-card" data-armed="0">
+      <div class="lock-text"><b id="drive-title">Balance only</b><small id="drive-sub">Joystick locked</small></div>
+      <button class="switch" id="drive-switch" type="button" role="switch" aria-checked="false" aria-label="Arm driving"><i></i></button>
+    </div>
+    <div class="joy glass" id="joy" data-live="0" aria-label="Joystick">
+      <span class="joy-mark n">FWD</span><span class="joy-mark s">REV</span><span class="joy-mark w">L</span><span class="joy-mark e">R</span>
+      <div class="joy-ring"></div>
+      <div class="joy-knob" id="knob"></div>
+    </div>
+    <div class="joy-read num"><span>fwd <b id="cmd-v">+0.00</b></span><span>turn <b id="cmd-t">+0.00</b></span></div>
+    <label class="field"><span>Speed limit</span><input type="range" id="limit" min="20" max="100" step="5"><output id="limit-out" class="num">50%</output></label>
+    <button class="pad-chip glass" id="pad-chip" type="button" data-state="none"><i class="dot"></i><span id="pad-chip-text">No controller</span></button>
+    <p class="stop-note">E-STOP is a software stop. Keep the battery switch within reach.</p>
+  </aside>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer glass" id="drawer" hidden aria-label="Setup">
+    <header class="drawer-head">
+      <div class="seg small" role="tablist" id="tabs">
+        <button type="button" data-tab="tune" class="on">Tuning</button>
+        <button type="button" data-tab="cal">Calibration</button>
+        <button type="button" data-tab="pad">Controller</button>
+        <button type="button" data-tab="log">Log</button>
+      </div>
+      <button class="icon-btn" id="drawer-close" type="button" aria-label="Close setup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+
+    <div class="tab" data-pane="tune">
+      <div class="row">
+        <button class="btn small" data-cmd="save" type="button">Save</button>
+        <button class="btn small quiet" data-cmd="load" type="button">Reload</button>
+        <button class="btn small quiet" data-cmd="reset" type="button">Default PID</button>
+        <button class="btn small quiet" id="btn-tune" type="button">Auto-tune</button>
+      </div>
+      <p class="hint">Changes apply live. Saving needs balancing off. Auto-tune adjusts kp, kd and ks while the robot balances (2–6 min); stand it up again whenever it falls.</p>
+      <div id="params"></div>
+    </div>
+
+    <div class="tab" data-pane="cal" hidden>
+      <h3>Calibration <small>in this order, the first time</small></h3>
+      <div class="steps">
+        <button class="btn step" data-cmd="calg" type="button"><b>1 · Gyro</b><small>keep the robot still</small></button>
+        <button class="btn step" data-cmd="calup" type="button"><b>2 · Upright</b><small>hold it at its balance point</small></button>
+        <button class="btn step" data-cmd="calfwd" type="button"><b>3 · Forward</b><small>tilt it about 20° forward</small></button>
+      </div>
+      <h3>Tests <small>wheels off the ground</small></h3>
+      <div class="row">
+        <button class="btn small quiet" data-cmd="mt" type="button">Motor test</button>
+        <button class="btn small quiet" data-cmd="invl" type="button">Reverse left</button>
+        <button class="btn small quiet" data-cmd="invr" type="button">Reverse right</button>
+      </div>
+      <div class="row">
+        <button class="btn small quiet" data-cmd="ramp" type="button">Min PWM ramp</button>
+        <button class="btn small" data-cmd="ok" type="button">They turn</button>
+        <button class="btn small quiet" data-cmd="stop" type="button">Cancel</button>
+      </div>
+      <p class="hint">Calibration and tests turn balancing off. Press <b>Balance on</b> when you are done.</p>
+    </div>
+
+    <div class="tab" data-pane="pad" hidden>
+      <div class="pad-status" id="pad-status">No controller detected.</div>
+      <div id="pad-figure"></div>
+      <div class="map" id="pad-map"></div>
+      <div class="fixed-map">
+        <span><b>Left stick ↕</b> forward / back</span><span id="map-turn"><b>Right stick ↔</b> turn</span>
+        <span><b>RT</b> raise speed limit</span><span><b>LT</b> precision</span>
+      </div>
+      <label class="field"><span>Stick layout</span>
+        <select id="pad-layout"><option value="split">Split: left drives, right turns</option><option value="single">Single: left stick does both</option></select></label>
+      <label class="field check"><input type="checkbox" id="pad-invert"><span>Invert forward / back</span></label>
+      <label class="field"><span>Controller dead zone</span><input type="range" id="pad-dz" min="0" max="35" step="1"><output id="pad-dz-out" class="num"></output></label>
+      <label class="field"><span>Joystick dead zone</span><input type="range" id="joy-dz" min="0" max="30" step="1"><output id="joy-dz-out" class="num"></output></label>
+      <p class="hint" id="pad-help"></p>
+    </div>
+
+    <div class="tab" data-pane="log" hidden>
+      <div class="log num" id="log" aria-live="polite"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- ===================== STATISTICS ===================== -->
+<main id="page-statistics" class="page stats">
+  <section class="hero">
+    <div class="hero-head">
+      <div>
+        <h1>Telemetry</h1>
+        <p class="sub">Read-only view of the robot. This page never sends commands.</p>
+      </div>
+      <div class="hero-meta">
+        <span class="pill" id="st-mode">—</span>
+        <span class="pill num" id="st-age">no data</span>
+      </div>
+    </div>
+    <div class="anno" id="anno">
+      <canvas id="twin2" class="twin"></canvas>
+      <svg class="leaders" id="leaders" aria-hidden="true"></svg>
+      <div class="markers" id="markers" aria-hidden="true"></div>
+      <div class="anno-col left" id="anno-left"></div>
+      <div class="anno-col right" id="anno-right"></div>
+      <div class="banner glass" id="banner2" hidden></div>
+      <p class="stage-note">Wheel motion is drawn from the motor command. The robot has no encoders.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <header class="block-head">
+      <h2>Signals</h2>
+      <div class="seg small" id="win-seg" role="group" aria-label="Time window">
+        <button type="button" data-win="10">10 s</button><button type="button" data-win="30">30 s</button><button type="button" data-win="60">60 s</button>
+      </div>
+    </header>
+    <div class="charts">
+      <figure class="chart wide" data-chart="pitch"><figcaption><span class="title">Pitch vs target <small>°</small></span><span class="legend"></span></figcaption><canvas></canvas></figure>
+      <figure class="chart" data-chart="motor"><figcaption><span class="title">Motor command <small>PWM, −255…255</small></span><span class="legend"></span></figcaption><canvas></canvas></figure>
+      <figure class="chart" data-chart="rate"><figcaption><span class="title">Pitch rate <small>°/s</small></span><span class="legend"></span></figcaption><canvas></canvas></figure>
+      <figure class="chart" data-chart="speed"><figcaption><span class="title">Speed estimate <small>fraction of full command</small></span><span class="legend"></span></figcaption><canvas></canvas></figure>
+      <figure class="chart" data-chart="rtt"><figcaption><span class="title">Link round trip <small>ms, this device</small></span><span class="legend"></span></figcaption><canvas></canvas></figure>
+    </div>
+  </section>
+
+  <section class="block two">
+    <div class="panel">
+      <h2>Diagnostics</h2>
+      <ul class="warnings" id="warnings"></ul>
+      <dl class="kv" id="diag"></dl>
+      <h3>Controller parameters</h3>
+      <dl class="kv params" id="diag-params"></dl>
+    </div>
+    <div class="panel">
+      <h2>Experiments</h2>
+      <p class="hint">Record what the robot does, then compare runs or export them. Recordings stay in this browser; nothing is stored on the robot.</p>
+      <div class="row rec-row">
+        <button class="btn" id="btn-rec" type="button"><i class="rec-dot"></i><span>Record</span></button>
+        <span class="num rec-info" id="rec-info">Idle</span>
+      </div>
+      <div class="table-wrap">
+        <table class="sessions" id="sessions">
+          <thead><tr><th>Run</th><th>Length</th><th>RMS error</th><th>Max |pitch|</th><th>Saturated</th><th>Mean |PWM|</th><th>Falls</th><th>kp · kd · ks</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="sessions-empty">No recordings yet.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+<script src="{{app.js}}"></script>
+</body>
+</html>

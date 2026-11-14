@@ -3,7 +3,7 @@
 //
 //  The same firmware builds for:
 //    * Arduino Nano (ATmega328P)     -> tuning over the Serial Monitor
-//    * Arduino Nano ESP32 (ABX00092) -> Serial Monitor + WiFi app
+//    * Arduino Nano ESP32 (ABX00092) -> Serial Monitor + WiFi app (/control, /statistics)
 //
 //  Both boards use the SAME screw terminals on the Nano terminal shield
 //  (D2..D9, A4, A5), so you can swap boards without rewiring. Only change:
@@ -47,6 +47,8 @@
 #define ARM_TIME_MS      400
 #define I_TERM_LIMIT     120.0f     // integral anti-windup (PWM units)
 #define CMD_TIMEOUT_MS   600        // no app command for this long => joystick back to 0
+#define DRIVE_DISARM_MS  2000       // no command from the armed client for this long => drive locks again
+#define TELEMETRY_HZ     50         // samples per second sent to the web app (divides LOOP_HZ)
 #define SAT_PWM          250.0f     // |PWM| at or above this counts as saturated
 #define SOFT_START_MS    1500       // the speed loop fades in over this time after starting
 #define LATCH_MS         250        // saturated this long while nearly upright => reset speed loop
@@ -80,3 +82,13 @@
 #define AP_SSID_PREFIX "BalanceBot"   // 4 unique hex digits are appended
 #define AP_PASSWORD    "balance123"   // at least 8 characters
 #define AP_CHANNEL     6              // 2.4 GHz channel (1-13)
+
+// ---------------------------------------------------------------------
+//  Battery voltage (Nano ESP32 only, optional hardware)
+//  Wire the battery + through a divider to an ADC pin: for 2S/3S packs,
+//  100 k from battery + to the pin and 33 k from the pin to GND keeps the
+//  pin below 3.3 V. Until this is fitted the app shows "not instrumented".
+// ---------------------------------------------------------------------
+#define BATTERY_SENSE    0            // 1 = a divider is wired to BATTERY_PIN
+#define BATTERY_PIN      A0
+#define BATTERY_DIVIDER  4.03f        // (R1 + R2) / R2 = (100 k + 33 k) / 33 k
