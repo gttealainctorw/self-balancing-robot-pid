@@ -108,7 +108,7 @@ The robot serves a two-page web app from its own flash. No internet and no insta
 
 1. Power the robot on. It creates a network called **`BalanceBot-XXXX`**, password **`balance123`** (you can change it in `config.h`). The exact name is shown by the `info` command.
 2. Join it from your phone, tablet or PC. If the device warns "no internet", choose to stay connected.
-3. Open **http://192.168.4.1/control** to drive, or **http://192.168.4.1/statistics** to watch.
+3. Open **http://192.168.4.1** for the cover page, **http://192.168.4.1/control** to drive, or **http://192.168.4.1/statistics** to watch.
 
 The two pages are independent: open Control on one device and Statistics on another at the same time. Both read the same live telemetry, and changing the page on one device does nothing to the other.
 
@@ -117,10 +117,11 @@ The two pages are independent: open Control on one device and Statistics on anot
 ![Control page](docs/img/control.jpg)
 
 - **Status strip:** state, pitch, target, pitch rate, the command sent to each motor, IMU, battery and loop time.
-- **Digital twin:** the robot in 3D, tilting with the measured pitch. Drag to orbit, double-click to reset the view.
+- **Digital twin:** the robot in 3D, tilting with the measured pitch. Drag to orbit, or pick **Iso / Side / Front / Top**. The side view shows the tilt best.
 - **Drive lock:** the switch above the joystick. Until you arm it, the robot only balances and ignores the joystick and the controller.
 - **Joystick:** up = forward, sides = turn. On a PC the arrow keys or WASD work too. Releasing it returns to neutral.
 - **Speed limit:** scales every drive command (default 50 %).
+- **Figures:** with driving armed, **Heart** or **Infinity** makes the robot drive that shape by itself (about 24 s, and about 1.5 m of clear floor). Moving the joystick, **Stop**, or locking the drive cancels it. If you try to drive while locked, the page tells you how to arm.
 - **Balance on/off** and **E-STOP.** E-STOP turns balancing off, locks driving and cancels any test. `Space` or `Esc` on a keyboard does the same.
 - **Padlock (top right):** locks you into this page so you cannot leave it by accident. Press and hold it for a second to unlock.
 - **Setup:** live tuning of all 14 parameters, save/reload, auto-tune, calibration, motor tests, controller mapping and the message log.
@@ -132,9 +133,16 @@ The two pages are independent: open Control on one device and Statistics on anot
 Read-only: this page only requests telemetry and never sends a command.
 
 - **Annotated twin:** numbered cards tied to the IMU, the controller board, the motor driver, each motor and the wheels by leader lines.
-- **Charts:** pitch vs target, motor command left/right, pitch rate, speed estimate and link round trip. Choose a 10, 30 or 60 s window; hover or tap for the value at a point in time.
+- **Signals:** one stacked panel with a shared time axis: pitch and target, the three **PID terms** with the output they add up to, the command to each motor, pitch rate, speed estimate and link round trip.
+  - Hover to read every signal at the same instant.
+  - **Pause**, then drag to go back in time and scroll to zoom; double-click returns to live.
+  - Dashed red lines mark the ±255 PWM limit. Lines break where samples are missing.
 - **Diagnostics:** operating state, IMU, sample rate received, data age, missed samples, failed polls, round trip, uptime, loop time, all controller parameters, and warnings.
 - **Experiments:** press **Record**, let the robot run, press **Stop**. Each run gets a summary (RMS error, max tilt, saturation, mean command, falls) with the gains that were in force, so runs can be compared. **CSV** downloads the samples for MATLAB or a spreadsheet. Recordings are kept in that browser; nothing is stored on the robot.
+
+### How the figures work, and their limits
+
+The robot follows the **heading** of the shape with the gyroscope while driving forward at a steady command. Heading is measured, so the outline is recognisable. Distance is not measured (there are no encoders), so the size, and whether the shape closes exactly, depend on the floor, the battery and how evenly the two motors pull. The heart starts and ends at its bottom tip; the infinity is two circles, one each way.
 
 ### What the app shows, and what it does not
 
@@ -202,7 +210,7 @@ and upload the sketch again. `web_assets.h` is committed, so the Arduino IDE nee
 node --test web/test/lib.test.js
 ```
 
-Everything uses the Python standard library; there are no npm packages. On the robot, the `webtest` serial command makes it download all of its own pages and report sizes and status.
+Everything uses the Python standard library; there are no npm packages. The typefaces are Hanken Grotesk and Red Hat Mono, Latin subsets, with their Open Font Licences in `web/fonts/`. The cover image is `web/img/cover.webp`. On the robot, the `webtest` serial command makes it download all of its own pages and report sizes and status.
 
 The digital twin uses the three deck models from [adoodevv/self_balancing_robot](https://github.com/adoodevv/self_balancing_robot) (`models/` folder) as they are. Motors, wheels and boards are parametric stand-ins with catalogue dimensions, placed on the mounting features of those decks. Design decisions and the libraries that were considered are in [docs/DESIGN_AND_TECH_RESEARCH.md](docs/DESIGN_AND_TECH_RESEARCH.md).
 
@@ -220,6 +228,7 @@ The digital twin uses the three deck models from [adoodevv/self_balancing_robot]
 | `autotune` / `autotune stop` | Self-tune `kp`, `kd`, `ks` while it balances (see section 4) |
 | `estop` | Stop: balancing off, driving locked, tests cancelled |
 | `arm` / `disarm` | Nano ESP32: unlock / lock driving (needed before `d`) |
+| `fig heart` · `fig inf` · `fig stop` | Nano ESP32: drive a heart or an infinity (optional duration in seconds, e.g. `fig heart 30`) |
 | `i2c` | Scan the I2C bus (wiring check) |
 | `webtest` | Nano ESP32: the robot downloads its own web pages and reports sizes and status |
 | `wifi` | Nano ESP32 radio check: TX power and the networks the robot can hear |

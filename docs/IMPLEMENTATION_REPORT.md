@@ -144,3 +144,45 @@ Fidelity statement: the deck geometry is the CAD. Motors, wheels and boards are 
 - **Without the robot:** `python tools/dev_server.py`, then `http://localhost:8080/control`.
 - **Bridge for controllers:** `python tools/dev_server.py --robot http://192.168.4.1`.
 - **After editing `web/`:** `python tools/build_web.py`, then upload the sketch.
+
+## 12. Second pass (firmware 2.1.0, 2026-11-15)
+
+**Added**
+
+- Cover page at `/` using the supplied artwork unmodified, with link areas over its navigation and buttons, and two short text sections below it.
+- Statistics: the charts are now one stacked panel with a shared time axis and cursor, pause/pan/zoom, limit lines and gaps where data is missing. A **PID terms** row shows P, I, D and the output.
+- Firmware: the three PID terms are sent with every sample; `fig heart`, `fig inf`, `fig stop` drive a figure by gyro heading; `/` serves the app.
+- Control: Heart / Infinity buttons, camera presets for the twin, and a prompt explaining how to arm when the joystick or the controller is used while locked.
+- Twin: reflection in the floor, studio reflection on metal parts, tyre tread, hub nuts and deck screws (11 656 triangles, 26 kB gzip).
+- Typography and visual language replaced (see `DESIGN_AND_TECH_RESEARCH.md`, section H).
+
+**Tested**
+
+| Test | Result |
+|---|---|
+| Unit tests | 8 of 8 |
+| Compile, both boards | Nano ESP32 1 269 kB (40 %); classic Nano 27 904 bytes (90 %, unchanged) |
+| Cover in Chromium | Image shown at its exact aspect ratio; its 12 link areas point to the intended pages; the cover makes no request to the robot API |
+| Shared cursor | Hovering one chart sets the cursor time for all and updates every legend |
+| Pause, pan, zoom | Pause freezes the view while samples keep buffering; panning moved the view by the requested 3 s; wheel changed the window 30 → 24 s; double-click returned to live |
+| PID terms | Present in the simulated telemetry and drawn; the response to a disturbance is visible in P, D and output |
+| Figures, **simulated robot** | Heart: refused while locked with a prompt; ran when armed, showing progress; the path integrated from the simulated yaw rate and speed estimate is a recognisable heart, closing to within 0.07 of its 0.6 extent |
+| Layout | No horizontal overflow where measured: cover at 1280 × 720 and 390 × 780, Control at 390 × 780 and 780 × 390 (everything on one screen), Statistics at 390 × 780. No console errors on any page |
+
+**On the real Nano ESP32 (firmware 2.1.0 flashed, USB serial)**
+
+| Test | Result |
+|---|---|
+| `webtest` | All 10 resources returned `200` with the exact byte counts, including the 132 900-byte cover image |
+| `webtest dump` | `/t` is valid JSON with 13 fields per sample (the three PID terms included), 20 ms apart, plus `fig` and `fp`; `/s` reports firmware 2.1.0 |
+| `fig heart` while locked | Refused: "Cannot start: the robot must be balancing and driving armed by you" |
+| Saved parameters | Kept across the update (motor inversion and gains unchanged) |
+
+**Not tested**
+
+- The app in a browser against the real robot, as in the first pass.
+- The figures on a real floor. Their size and closure depend on the surface and the motors, and the heading gains (`FIG_TURN_GAIN`, `FIG_DRIVE` in `config.h`) may need adjusting.
+- The infinity figure was implemented with the same code path as the heart but only the heart was run in the simulator.
+- Safari and Firefox.
+
+**Note on the cover artwork.** The image was supplied by the project owner. Its composition closely follows a published third-party web design; if the repository stays public, check that the artwork may be redistributed.
