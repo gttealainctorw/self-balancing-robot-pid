@@ -47,6 +47,10 @@
 #define ARM_TIME_MS      400
 #define I_TERM_LIMIT     120.0f     // integral anti-windup (PWM units)
 #define CMD_TIMEOUT_MS   600        // no app command for this long => joystick back to 0
+#define SAT_PWM          250.0f     // |PWM| at or above this counts as saturated
+#define SOFT_START_MS    1500       // the speed loop fades in over this time after starting
+#define LATCH_MS         250        // saturated this long while nearly upright => reset speed loop
+#define LATCH_ANGLE      6.0f       // "nearly upright" for the latch breaker (degrees)
 #define DRIVE_SLEW       1.5f       // max rate of the forward/back command (1/s)
 #define TURN_SLEW        4.0f       // same for turning
 

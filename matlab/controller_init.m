@@ -17,6 +17,8 @@ st.iTerm    = 0;
 st.driveSm  = 0;
 st.turnSm   = 0;
 st.armTicks = 0;
+st.runTicks = 0;
+st.satTicks = 0;
 st.run      = armed;
 st.fallen   = false;
 end
