@@ -288,9 +288,3 @@ Both balance with the same algorithm. **Recommended: Nano ESP32**:
 | The page loads but the 3D robot is a flat drawing | The browser has no WebGL2; the app falls back to a 2D side view |
 | Controller not detected | Press a button on it with the page focused. See *Xbox controller* in section 5 for the secure-context caveat |
 | I cannot see the WiFi network | Only the Nano ESP32 has WiFi; the Serial Monitor (`info`) shows the network name |
-
-## Credits
-
-Based on the idea and schematic of [adoodevv/self_balancing_robot](https://github.com/adoodevv/self_balancing_robot) (MIT). The three deck models of the digital twin come from its `models/` folder (see `web/model/cad/NOTICE.md`). The firmware, app and simulation in this repository were written from scratch.
-
-The app's typeface is [Geist](https://github.com/vercel/geist-font) by Vercel, used under the SIL Open Font License (`web/fonts/OFL.txt`).
