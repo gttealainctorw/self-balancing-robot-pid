@@ -4,7 +4,8 @@
 The robot serves its web app from flash, so the sources in web/ are turned
 into gzip blobs with content-hashed URLs (cached for a year by the browser):
 
-  web/index.html              -> /control and /statistics (same document)
+  web/index.html              -> /, /control and /statistics (same document)
+  web/img/*.webp              -> /a/<hash>/<name>.webp    (already compressed)
   web/app.css                 -> /a/<hash>/app.css
   web/js/*.js (sorted, joined)-> /a/<hash>/app.js
   web/model/robot.bin         -> /a/<hash>/robot.bin
@@ -67,6 +68,9 @@ def build():
     for name in sorted(os.listdir(os.path.join(WEB, 'fonts'))):
         if name.endswith('.woff2'):
             hashed(name, 'font/woff2', read('fonts', name, binary=True), False)
+    for name in sorted(os.listdir(os.path.join(WEB, 'img'))):
+        if name.endswith('.webp'):
+            hashed(name, 'image/webp', read('img', name, binary=True), False)
     hashed('robot.bin', 'application/octet-stream', read('model', 'robot.bin', binary=True), True)
     hashed('app.css', 'text/css', fill(read('app.css')).encode(), True)
     hashed('app.js', 'application/javascript', bundle_js().encode(), True)
@@ -89,7 +93,7 @@ def write_header(assets):
             out.append(','.join(str(b) for b in d[k:k + 40]) + ',')
         out.append('};')
         out.append('')
-    out.append('// Entry 0 is the HTML document, used for both /control and /statistics.')
+    out.append('// Entry 0 is the HTML document, used for /, /control and /statistics.')
     out.append('static const WebAsset WEB_ASSETS[] = {')
     for i, a in enumerate(assets):
         out.append('  {"%s", "%s", WEB_ASSET_%d, %d, %s, %s},' % (

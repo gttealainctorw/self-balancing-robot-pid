@@ -23,6 +23,7 @@ function startControl() {
   bindHeader(link);
   const twin = Twin($('#twin'), { orbit: 'full' });
   driveTwin(twin, link);
+  bindViews($('#views'), twin);
 
   // ---- messages and log ----
   const logEl = $('#log');
@@ -48,7 +49,19 @@ function startControl() {
     if (m > 1) { x /= m; y /= m; }
     joy.x = x; joy.y = y; joy.active = true;
   }
-  joyEl.addEventListener('pointerdown', e => { joyEl.setPointerCapture(e.pointerId); joyMove(e); });
+  let lastNudge = 0;
+  function nudge(text) {                   // someone tried to drive while the lock is closed
+    const now = performance.now();
+    if (now - lastNudge < 2500) return;
+    lastNudge = now;
+    const card = $('#lock-card');
+    card.classList.remove('nudge'); void card.offsetWidth; card.classList.add('nudge');
+    toast(text);
+  }
+  joyEl.addEventListener('pointerdown', e => {
+    joyEl.setPointerCapture(e.pointerId); joyMove(e);
+    if (!link.isOwner()) nudge(Store.state.e ? 'Driving is locked. Turn on the switch above the joystick.' : 'Turn balancing on first, then arm driving.');
+  });
   joyEl.addEventListener('pointermove', e => { if (joy.active && joyEl.hasPointerCapture(e.pointerId)) joyMove(e); });
   const release = () => { joy.x = joy.y = 0; joy.active = false; };
   joyEl.addEventListener('pointerup', release);
@@ -102,6 +115,17 @@ function startControl() {
   $('#btn-estop').addEventListener('click', estop);
   $('#btn-balance').addEventListener('click', () => link.cmd(Store.state.e ? 'off' : 'on'));
 
+  // Figures: the robot drives a heart or an infinity by itself (see the firmware).
+  $('#figures').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-fig]');
+    if (!btn) return;
+    const fig = btn.dataset.fig;
+    if (fig === 'stop') { link.cmd('fig stop', true); return; }
+    if (!link.isOwner()) { nudge('Arm driving first: figures need the drive lock open.'); return; }
+    const reply = await link.cmd('fig ' + fig, true);
+    if (reply) toast(reply, /cannot/i.test(reply) ? 'bad' : '');
+  });
+
   // Anything that takes attention or input away closes the drive lock. It is
   // never reopened automatically.
   const leave = () => {
@@ -146,6 +170,9 @@ function startControl() {
     link.drive.v = owner ? cmd.v : 0;
     link.drive.t = owner ? cmd.t : 0;
     input.x = x; input.y = y; input.dz = dz;
+    if (!owner && !joy.active && pad.connected && Math.hypot(x, y) > 0.5 && link.status === 'live') {
+      nudge(`Driving is locked. Press ${PAD_BUTTONS[cfg.padButtons.arm] || 'the arm button'} on the controller to arm it.`);
+    }
     return owner;
   }
   link.beforePoll = updateCommand;
@@ -202,9 +229,12 @@ function startControl() {
     else if (live && (st.m === 'motor-test' || st.m === 'ramp')) b = 'Motor test running';
     else if (live && !st.e) b = 'Balancing is off';
     else if (live && st.m === 'idle') b = 'Ready: hold it upright';
+    else if (live && st.fig) b = `Drawing ${st.fig === 2 ? 'a heart' : 'an infinity'} · ${st.fp || 0} %`;
     ui.banner.hidden = !b;
     setText(ui.banner, b);
-    ui.banner.dataset.tone = /error|fallen|no link/i.test(b) ? 'bad' : '';
+    ui.banner.dataset.tone = /error|fallen|no link/i.test(b) ? 'bad' : st.fig ? 'go' : '';
+    $('#fig-stop').hidden = !st.fig;
+    $$('#figures [data-fig]').forEach(el => el.classList.toggle('on', (el.dataset.fig === 'heart' && st.fig === 2) || (el.dataset.fig === 'inf' && st.fig === 1)));
 
     // controller chip
     const padState = !pad.supported ? 'off' : pad.connected ? 'on' : 'none';
@@ -262,6 +292,7 @@ function startControl() {
     $$('.tab', drawer).forEach(p => { p.hidden = p.dataset.pane !== name; });
   }
   $('#btn-setup').addEventListener('click', () => openDrawer());
+  if (location.hash === '#setup') openDrawer();
   $('#drawer-close').addEventListener('click', closeDrawer);
   scrim.addEventListener('click', closeDrawer);
   $('#tabs').addEventListener('click', e => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); });

@@ -9,6 +9,7 @@ function startStats() {
   bindHeader(link);
   const twin = Twin($('#twin2'), { orbit: 'horizontal', az: -0.55, el: 0.3, dist: 490 });
   driveTwin(twin, link);
+  bindViews($('#views2'), twin);
   const fresh = () => link.status === 'live' && performance.now() - Store.lastSampleAt < 700;
   const val = (field, digits, sign) => (fresh() ? F(Store.latest(field), digits, sign) : '—');
   const P = key => (Store.info && Store.info.p[key] != null ? Store.info.p[key] : NaN);
@@ -25,6 +26,7 @@ function startStats() {
     { id: 'mcu', title: 'Controller · Nano ESP32', rows: [
       ['Target angle', () => val(2, 1, true) + ' °'],
       ['Gains kp · kd · ks', () => (Store.info ? ['kp', 'kd', 'ks'].map(k => +P(k).toFixed(2)).join(' · ') : '—')],
+      ['P · I · D', () => (fresh() ? [10, 11, 12].map(f => Lib.fmt(Store.latest(f), 0, true)).join(' · ') : '—')],
       ['Control loop', () => (Store.state.lu != null && link.status === 'live' ? Store.state.lu + ' µs' : '—')]] },
     { id: 'driver', title: 'Motor driver · L298N', rows: [
       ['Controller output', () => val(4, 0, true) + ' PWM'],
@@ -102,26 +104,38 @@ function startStats() {
     drawLeaders(points);
   };
 
-  // ---- charts --------------------------------------------------------------
-  const charts = {
-    pitch: StripChart($('[data-chart="pitch"]'), { digits: 2, signed: true, minSpan: 4, series: [
-      { field: 1, label: 'pitch', color: C_VIOLET }, { field: 2, label: 'target', color: C_SOFT }] }),
-    motor: StripChart($('[data-chart="motor"]'), { digits: 0, signed: true, minSpan: 60, series: [
-      { field: 5, label: 'left', color: C_VIOLET }, { field: 6, label: 'right', color: C_BLUE }] }),
-    rate: StripChart($('[data-chart="rate"]'), { digits: 1, signed: true, minSpan: 20, series: [
-      { field: 3, label: 'pitch rate', color: C_BLUE }] }),
-    speed: StripChart($('[data-chart="speed"]'), { digits: 3, signed: true, minSpan: 0.2, series: [
-      { field: 7, label: 'speed est.', color: C_AMBER }] }),
-    rtt: StripChart($('[data-chart="rtt"]'), { digits: 0, zero: true, minSpan: 40, series: [
-      { rtt: true, label: 'round trip', color: C_SOFT }] }),
+  // ---- charts: one stacked panel, one time axis, one cursor -------------------
+  const SAT = [{ v: 255, label: 'limit +255' }, { v: -255, label: 'limit −255' }];
+  StripChart($('[data-chart="pitch"]'), { digits: 2, signed: true, minSpan: 4, series: [
+    { field: 1, label: 'pitch', color: C_VIOLET }, { field: 2, label: 'target', color: C_SOFT, dash: true }] });
+  StripChart($('[data-chart="pid"]'), { digits: 0, signed: true, minSpan: 60, refs: SAT, series: [
+    { field: 10, label: 'P', color: C_VIOLET }, { field: 11, label: 'I', color: C_AMBER }, { field: 12, label: 'D', color: C_BLUE },
+    { field: 4, label: 'output', color: C_SOFT, dash: true }] });
+  StripChart($('[data-chart="motor"]'), { digits: 0, signed: true, minSpan: 60, refs: SAT, series: [
+    { field: 5, label: 'left', color: C_VIOLET }, { field: 6, label: 'right', color: C_BLUE }] });
+  StripChart($('[data-chart="rate"]'), { digits: 1, signed: true, minSpan: 20, series: [
+    { field: 3, label: 'pitch rate', color: C_BLUE }] });
+  StripChart($('[data-chart="speed"]'), { digits: 3, signed: true, minSpan: 0.2, series: [
+    { field: 7, label: 'speed est.', color: C_AMBER }] });
+  StripChart($('[data-chart="rtt"]'), { digits: 0, zero: true, minSpan: 40, axis: true, series: [
+    { rtt: true, label: 'round trip', color: C_SOFT }] });
+
+  ChartView.window = cfg.window;
+  const winSeg = $('#win-seg'), pauseBtn = $('#btn-pause'), cursorRead = $('#cursor-read');
+  ChartView.onChange = () => {
+    $$('button', winSeg).forEach(b => b.classList.toggle('on', +b.dataset.win === Math.round(ChartView.window)));
+    setText(pauseBtn, ChartView.paused ? 'Back to live' : 'Pause');
+    pauseBtn.classList.toggle('paused', ChartView.paused);
+    const t = ChartView.cursor;
+    setText(cursorRead, t == null ? (ChartView.paused ? 'paused' : '') : `t ${(t - Store.latestTime()).toFixed(2).replace('-', '−')} s`);
   };
-  const winSeg = $('#win-seg');
-  const paintWin = () => $$('button', winSeg).forEach(b => b.classList.toggle('on', +b.dataset.win === cfg.window));
   winSeg.addEventListener('click', e => {
     if (!e.target.dataset.win) return;
-    cfg.window = +e.target.dataset.win; Settings.save(); paintWin();
+    cfg.window = +e.target.dataset.win; Settings.save();
+    ChartView.setWindow(cfg.window);
   });
-  paintWin();
+  pauseBtn.addEventListener('click', () => (ChartView.paused ? ChartView.live() : ChartView.pause()));
+  ChartView.onChange();
 
   // ---- diagnostics ---------------------------------------------------------
   const diag = $('#diag'), diagParams = $('#diag-params'), warnings = $('#warnings');
@@ -190,7 +204,7 @@ function startStats() {
     const b = link.status === 'offline' ? 'No link to the robot' : live && !fresh() && st.m !== 'calibrating' ? 'Waiting for data' : '';
     banner.hidden = !b; setText(banner, b);
 
-    for (const k in charts) charts[k].draw();
+    ChartView.charts.forEach(c => c.draw());
     paintRec();
   }
 
@@ -290,5 +304,5 @@ function startStats() {
 
   link.start();
   setInterval(paintSlow, 100);
-  return { link, twin, rec, charts };
+  return { link, twin, rec, view: ChartView };
 }

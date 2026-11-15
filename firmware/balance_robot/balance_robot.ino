@@ -40,7 +40,7 @@
   #define HAS_WIFI 0
 #endif
 
-#define FW_VERSION   "2.0.0"
+#define FW_VERSION   "2.1.0"
 #define PARAMS_MAGIC 0xB0B1   // change it if you modify the Params struct
 
 const float    DT    = 1.0f / LOOP_HZ;
@@ -154,7 +154,8 @@ float    atSE = 0, atSDu = 0, atSV = 0, atSSat = 0;
   // that the HTTP handlers read in batches. Values are scaled integers.
   struct Sample {
     uint32_t t;                       // millis()
-    int16_t a, tg, r, u, l, rr, v, ro, y;   // see docs: pitch*100, target*100, rate*10, u, pwmL, pwmR, vEst*1000, roll*100, yaw*10
+    int16_t a, tg, r, u, l, rr, v, ro, y;   // pitch*100, target*100, rate*10, u, pwmL, pwmR, vEst*1000, roll*100, yaw*10
+    int16_t p, i, d;                  // the three PID terms that add up to u (PWM units)
   };
   const uint16_t SAMPLE_SLOTS = 128;
   const uint8_t  SAMPLE_DIV = LOOP_HZ / TELEMETRY_HZ;
@@ -163,12 +164,25 @@ float    atSE = 0, atSDu = 0, atSV = 0, atSSat = 0;
   volatile uint32_t sampleHead = 0;   // total samples published
   uint8_t sampleTick = 0;
   float rollF = 0, yawRate = 0;       // accelerometer roll estimate, gyro yaw rate
+  float termP = 0, termD = 0;         // proportional and derivative terms of the last control step
   volatile int16_t pwmOutL = 0, pwmOutR = 0;   // last values written to each motor
 
   // Driving is locked until one client arms it; only that client's commands count.
   volatile bool driveArmed = false;
   volatile uint32_t driveOwner = 0;
   uint32_t cmdClient = 1;             // who sent the command being parsed (1 = serial)
+
+  // Figures: the robot drives a shape by following its heading profile with
+  // the gyro (yaw) while moving forward at a steady command. There are no
+  // encoders, so distance is not measured: the shape is recognisable, its
+  // size and closure depend on the floor and the battery.
+  enum Figure : uint8_t { FIG_NONE = 0, FIG_INFINITY, FIG_HEART };
+  volatile uint8_t figOn = FIG_NONE;
+  float figS = 0, figHeading = 0, figSeconds = FIG_SECONDS;
+  // Heading (degrees, + = left) along a heart, from the bottom tip, in 48 equal steps of path length.
+  const int16_t HEART_HEADING[49] PROGMEM = {0, 30, 39, 45, 48, 49, 49, 48, 46, 41, 34, 25, 11, -5, -21, -36, -51,
+    -65, -80, -96, -112, -127, -142, -156, 0, -24, -38, -53, -68, -84, -100, -115, -129, -144, -159, -176, -191,
+    -205, -215, -221, -226, -229, -230, -229, -228, -225, -219, -210, -180};
   float battV = 0;
 #else
   uint32_t nextTick = 0;
@@ -594,6 +608,10 @@ void runStep() {
   } else {
     satTicks = 0;
   }
+#if HAS_WIFI
+  termP = P.kp * err;                  // reported as telemetry; u is their sum, limited to +-255
+  termD = P.kd * rateF;
+#endif
   if (atOn) atTick(err, u);
   uOut = u;
 
@@ -679,6 +697,7 @@ void i2cScanReport() {
 // ---------------------------------------------------------------------
 #if HAS_WIFI
 void disarmDrive() {
+  figOn = FIG_NONE;
   driveArmed = false;
   driveCmd = 0;
   turnCmd = 0;
@@ -693,6 +712,29 @@ void driveLockCheck() {
     disarmDrive();
     report(lost ? F("Drive locked: control link lost") : F("Drive locked"));
   }
+}
+
+float figTarget(float s) {
+  if (figOn == FIG_INFINITY) return s < 0.5f ? 720.0f * s : 360.0f - 720.0f * (s - 0.5f);   // two circles
+  float x = s * 48.0f;
+  int i = (int)x;
+  if (i >= 48) return (int16_t)pgm_read_word(&HEART_HEADING[48]);
+  float a = (int16_t)pgm_read_word(&HEART_HEADING[i]), b = (int16_t)pgm_read_word(&HEART_HEADING[i + 1]);
+  return fabsf(b - a) > 90.0f ? a : a + (b - a) * (x - i);      // no blending across a cusp
+}
+
+// Called every control tick while a figure runs: sets the drive and turn commands.
+void figStep(float& dc, float& tc) {
+  if (!driveArmed || mode != MODE_RUN) { figOn = FIG_NONE; report(F("Figure stopped")); return; }
+  if (millis() - lastCmdMs > CMD_TIMEOUT_MS) { dc = 0; tc = 0; return; }   // page not answering: wait
+  figHeading += yawRate * DT;
+  float err = figTarget(figS) - figHeading;                     // + = must turn left
+  float away = fabsf(err);
+  float pace = away < 12.0f ? 1.0f : away > 40.0f ? 0.0f : (40.0f - away) / 28.0f;   // slow down to turn
+  figS += pace * DT / figSeconds;
+  dc = FIG_DRIVE * pace;
+  tc = constrain(-err * FIG_TURN_GAIN, -1.0f, 1.0f);            // turn command: + = right
+  if (figS >= 1.0f) { figOn = FIG_NONE; dc = 0; tc = 0; report(F("Figure finished")); }
 }
 
 void pushSample() {
@@ -710,6 +752,10 @@ void pushSample() {
   s.v  = (int16_t)constrain(vEst * 1000.0f, -32000.0f, 32000.0f);
   s.ro = (int16_t)constrain(rollF * 100.0f, -32000.0f, 32000.0f);
   s.y  = (int16_t)constrain(yawRate * 10.0f, -32000.0f, 32000.0f);
+  const bool running = mode == MODE_RUN;
+  s.p  = running ? (int16_t)constrain(termP, -32000.0f, 32000.0f) : 0;
+  s.i  = running ? (int16_t)constrain(iTerm, -32000.0f, 32000.0f) : 0;
+  s.d  = running ? (int16_t)constrain(termD, -32000.0f, 32000.0f) : 0;
   sampleHead = h + 1;
 }
 #endif
@@ -799,6 +845,7 @@ void controlStep() {
   if (atOn || millis() - lastCmdMs > CMD_TIMEOUT_MS) { dc = 0; tc = 0; }  // no driving while autotuning
 #if HAS_WIFI
   if (!driveArmed) { dc = 0; tc = 0; }
+  if (figOn) figStep(dc, tc);
 #endif
   driveSm += constrain(dc - driveSm, -DRIVE_SLEW * DT, DRIVE_SLEW * DT);
   turnSm  += constrain(tc - turnSm,  -TURN_SLEW * DT,  TURN_SLEW * DT);
@@ -848,6 +895,7 @@ void printHelp(Print& out) {
   out.println(F(" estop               stop: balancing off, tests cancelled"));
 #if HAS_WIFI
   out.println(F(" arm / disarm        unlock / lock driving (needed before 'd')"));
+  out.println(F(" fig heart|inf [s]   drive a heart or an infinity (fig stop to cancel)"));
   out.println(F(" webtest [dump]      the robot requests its own web pages (serial only)"));
 #endif
 }
@@ -943,6 +991,20 @@ void handleCommand(char* line, Print& out) {
     return;
   }
   if (!strcmp(cmd, "disarm")) { disarmDrive(); out.println(F("Drive locked")); return; }
+  if (!strcmp(cmd, "fig")) {              // fig heart [seconds] | fig inf [seconds] | fig stop
+    uint8_t f = !a1 ? FIG_NONE : !strcmp(a1, "heart") ? FIG_HEART : !strncmp(a1, "inf", 3) ? FIG_INFINITY : FIG_NONE;
+    if (f == FIG_NONE) { figOn = FIG_NONE; out.println(F("Figure stopped")); return; }
+    if (!driveArmed || driveOwner != cmdClient || mode != MODE_RUN) {
+      out.println(F("Cannot start: the robot must be balancing and driving armed by you"));
+      return;
+    }
+    figSeconds = a2 ? constrain((float)atof(a2), 8.0f, 120.0f) : (float)FIG_SECONDS;
+    figS = 0;
+    figHeading = 0;
+    figOn = f;
+    out.println(f == FIG_HEART ? F("Drawing a heart: give it about 1.5 m of clear floor") : F("Drawing an infinity: give it about 1.5 m of clear floor"));
+    return;
+  }
   if (!strcmp(cmd, "webtest")) {
     if (&out == &Serial) webSelfTest(out, a1 && !strcmp(a1, "dump")); else out.println(F("webtest runs from the Serial Monitor only"));
     return;
@@ -1099,24 +1161,24 @@ uint16_t paramChecksum() {            // lets clients notice that a parameter ch
 // Telemetry for /t and /j: every sample since `since` (at most SAMPLE_BATCH),
 // the current state, and every status message since `msgSince`.
 const char* telemetryJson(uint32_t since, uint16_t msgSince) {
-  static char b[3800];                // only used from the loop() task
+  static char b[4800];                // only used from the loop() task
   const size_t cap = sizeof(b);
   uint32_t head = sampleHead;
   if (since > head || head - since > SAMPLE_BATCH) since = head > SAMPLE_BATCH ? head - SAMPLE_BATCH : 0;
   size_t n = snprintf(b, cap, "{\"n\":%lu,\"d\":[", (unsigned long)head);
-  for (uint32_t i = since; i < head && n < cap - 400; i++) {
+  for (uint32_t i = since; i < head && n < cap - 1200; i++) {
     const Sample& s = sampleRing[i % SAMPLE_SLOTS];
-    n += snprintf(b + n, cap - n, "%s[%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d]", i == since ? "" : ",",
-                  (unsigned long)s.t, s.a, s.tg, s.r, s.u, s.l, s.rr, s.v, s.ro, s.y);
+    n += snprintf(b + n, cap - n, "%s[%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d]", i == since ? "" : ",",
+                  (unsigned long)s.t, s.a, s.tg, s.r, s.u, s.l, s.rr, s.v, s.ro, s.y, s.p, s.i, s.d);
   }
   uint16_t mh = msgHead;
   n += snprintf(b + n, cap - n,
                 "],\"m\":\"%s\",\"e\":%d,\"imu\":%d,\"arm\":%d,\"own\":%lu,\"tune\":%d,\"fall\":%d,"
-                "\"rp\":%d,\"lu\":%u,\"up\":%lu,\"st\":%d,\"pv\":%u,\"mq\":%u",
+                "\"rp\":%d,\"lu\":%u,\"up\":%lu,\"st\":%d,\"pv\":%u,\"fig\":%d,\"fp\":%d,\"mq\":%u",
                 modeName(mode), motorsEnabled ? 1 : 0, imuOk ? 1 : 0, driveArmed ? 1 : 0,
                 (unsigned long)driveOwner, atOn ? 1 : 0, fallen ? 1 : 0, rampPwm, (unsigned)loopUs,
                 (unsigned long)(millis() / 1000), (int)WiFi.softAPgetStationNum(),
-                (unsigned)paramChecksum(), (unsigned)mh);
+                (unsigned)paramChecksum(), (int)figOn, figOn ? (int)(figS * 100.0f) : 0, (unsigned)mh);
 #if BATTERY_SENSE
   n += snprintf(b + n, cap - n, ",\"vb\":%.2f", battV);
 #endif
@@ -1153,8 +1215,14 @@ void handleTelemetry() { sendTelemetry(); }
 void handleJoy() {
   uint32_t client = strtoul(server.arg("c").c_str(), NULL, 10);
   if (driveArmed && client != 0 && client == driveOwner) {
-    if (server.hasArg("v")) driveCmd = constrain(server.arg("v").toFloat(), -1.0f, 1.0f);
-    if (server.hasArg("t")) turnCmd  = constrain(server.arg("t").toFloat(), -1.0f, 1.0f);
+    float v = constrain(server.arg("v").toFloat(), -1.0f, 1.0f);
+    float t = constrain(server.arg("t").toFloat(), -1.0f, 1.0f);
+    if (figOn && (fabsf(v) > 0.15f || fabsf(t) > 0.15f)) {       // touching the stick cancels a figure
+      figOn = FIG_NONE;
+      report(F("Figure stopped: joystick moved"));
+    }
+    driveCmd = v;
+    turnCmd = t;
     lastCmdMs = millis();
   }
   sendTelemetry();
@@ -1199,7 +1267,7 @@ void sendAsset(const WebAsset& a) {
   server.send_P(200, a.type, (PGM_P)a.data, a.len);
 }
 
-void handleShell() { sendAsset(WEB_ASSETS[0]); }   // /control and /statistics are the same document
+void handleShell() { sendAsset(WEB_ASSETS[0]); }   // /, /control and /statistics are the same document
 
 void handleOther() {
   const String& uri = server.uri();
@@ -1220,7 +1288,7 @@ void webTestTask(void* arg) {
   Serial.println(F("--- web self-test (robot -> its own server) ---"));
   uint8_t failures = 0;
   const uint8_t extra = 4;
-  const char* const pages[extra] = {"/control", "/statistics", "/t?s=0", "/s"};
+  const char* const pages[extra] = {"/", "/statistics", "/t?s=0", "/s"};
   static uint8_t buf[512];
   for (uint8_t i = 0; i < extra + WEB_ASSET_COUNT - 1; i++) {
     const char* path = i < extra ? pages[i] : WEB_ASSETS[i - extra + 1].path;
@@ -1294,10 +1362,7 @@ void wifiSetup() {
   snprintf(apSsid, sizeof(apSsid), "%s-%02X%02X", AP_SSID_PREFIX, mac[4], mac[5]);
   apStarted = WiFi.softAP(apSsid, AP_PASSWORD, AP_CHANNEL);
   WiFi.setSleep(false);
-  server.on("/", []() {
-    server.sendHeader("Location", "/control");
-    server.send(302, "text/plain", "");
-  });
+  server.on("/", handleShell);            // cover page
   server.on("/control", handleShell);
   server.on("/statistics", handleShell);
   server.on("/t", handleTelemetry);

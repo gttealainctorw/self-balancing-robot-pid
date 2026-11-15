@@ -51,17 +51,19 @@ const T16 = new Float32Array(16);
 
 const VS = `#version 300 es
 in vec3 aPos;
-uniform mat4 uMVP, uMV;
+uniform mat4 uMVP, uMV, uM;
 out vec3 vView;
-void main() { vec4 p = vec4(aPos, 1.0); vView = (uMV * p).xyz; gl_Position = uMVP * p; }`;
+out float vWorldZ;
+void main() { vec4 p = vec4(aPos, 1.0); vView = (uMV * p).xyz; vWorldZ = (uM * p).z; gl_Position = uMVP * p; }`;
 
 // Flat shading: the face normal comes from screen-space derivatives of the
 // view position, so the mesh needs no normals and no duplicated vertices.
 const FS = `#version 300 es
 precision highp float;
 in vec3 vView;
+in float vWorldZ;
 uniform vec3 uColor, uGlow;
-uniform float uSpec, uDim, uEdge;
+uniform float uSpec, uDim, uEdge, uMirror;
 out vec4 o;
 void main() {
   if (uEdge > 0.5) {
@@ -77,8 +79,17 @@ void main() {
   float hemi = 0.5 + 0.5 * n.y;
   float spec = pow(max(dot(n, normalize(key + v)), 0.0), 36.0) * uSpec;
   float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-  vec3 c = uColor * (0.16 + 0.26 * hemi + 0.78 * max(dot(n, key), 0.0) + 0.16 * max(dot(n, fill), 0.0));
-  c += vec3(spec) + vec3(0.50, 0.42, 1.0) * rim * 0.20 + uGlow * (0.30 + 0.70 * rim);
+  vec3 c = uColor * (0.15 + 0.25 * hemi + 0.80 * max(dot(n, key), 0.0) + 0.16 * max(dot(n, fill), 0.0));
+  // metals pick up a soft studio reflection: bright above, dark below
+  float env = smoothstep(-0.15, 0.85, reflect(-v, n).y);
+  c += vec3(0.80, 0.82, 0.95) * env * uSpec * uSpec * 0.42;
+  c += vec3(spec) + vec3(0.50, 0.42, 1.0) * rim * 0.18 + uGlow * (0.30 + 0.70 * rim);
+  if (uMirror > 0.5) {                       // reflection in the floor: fades with depth below it
+    float f = clamp(1.0 + vWorldZ / 120.0, 0.0, 1.0);
+    f *= f * 0.36;
+    o = vec4(c * uDim * f, f);
+    return;
+  }
   o = vec4(c * uDim, 1.0);
 }`;
 
@@ -105,7 +116,7 @@ void main() {
   float lines = max(1.0 - smoothstep(0.0, fwidth(p.x) * 1.3, g.x), 1.0 - smoothstep(0.0, fwidth(p.y) * 1.3, g.y));
   vec2 s = vW / vec2(75.0, 125.0);
   float shadow = exp(-dot(s, s) * 1.1) * 0.6;
-  float a = (dots * 0.42 + lines * 0.07) * fade * uDim;
+  float a = (dots * 0.46 + lines * 0.06) * fade * uDim;
   o = vec4(vec3(0.74, 0.70, 1.0) * a, a + shadow * (1.0 - a));
 }`;
 
@@ -159,7 +170,9 @@ function Twin(canvas, opts) {
   const proj = new Float32Array(16), view = new Float32Array(16), vp = new Float32Array(16);
   const roll = new Float32Array(16), tmp = new Float32Array(16), tmp2 = new Float32Array(16);
   const nodeM = [new Float32Array(16), new Float32Array(16), new Float32Array(16)];
-  const mv = new Float32Array(16), mvp = new Float32Array(16);
+  const mv = new Float32Array(16), mvp = new Float32Array(16), mm = new Float32Array(16);
+  const flip = M4.ident(new Float32Array(16)); flip[10] = -1;     // mirror about the floor
+  const GLOW_ERROR = [1.0, 0.25, 0.25];
   const zero3 = [0, 0, 0], glow3 = [0, 0, 0];
 
   function compile(vs, fs) {
@@ -179,7 +192,7 @@ function Twin(canvas, opts) {
   function setupGL() {
     prog = compile(VS, FS);
     gprog = compile(GROUND_VS, GROUND_FS);
-    for (const n of ['uMVP', 'uMV', 'uColor', 'uGlow', 'uSpec', 'uDim', 'uEdge']) loc[n] = gl.getUniformLocation(prog, n);
+    for (const n of ['uMVP', 'uMV', 'uM', 'uColor', 'uGlow', 'uSpec', 'uDim', 'uEdge', 'uMirror']) loc[n] = gl.getUniformLocation(prog, n);
     for (const n of ['uVP', 'uScroll', 'uDim']) gloc[n] = gl.getUniformLocation(gprog, n);
     const vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -254,55 +267,77 @@ function Twin(canvas, opts) {
     }
   }
 
-  function draw() {
+  function drawParts(pass, mirror) {
+    // pass 0: faces, pass 1: feature edges. mirror: the reflection under the floor.
     const p = twin.pose, s = model.meta.scale;
+    gl.bindVertexArray(pass ? vaoEdge : vaoTri);
+    gl.uniform1f(loc.uEdge, pass);
+    gl.uniform1f(loc.uMirror, mirror ? 1 : 0);
+    let node = -1;
+    for (const part of model.meta.parts) {
+      const range = pass ? part.e : part.t;
+      if (!range[1]) continue;
+      if (part.node !== node) {
+        node = part.node;
+        M4.mul(mm, mirror ? M4.mul(tmp2, flip, nodeM[node]) : nodeM[node], M4.scale(tmp, s));
+        M4.mul(mvp, vp, mm);
+        gl.uniformMatrix4fv(loc.uMVP, false, mvp);
+        gl.uniformMatrix4fv(loc.uM, false, mm);
+        gl.uniformMatrix4fv(loc.uMV, false, M4.mul(mv, view, mm));
+      }
+      let g = 0;
+      if (part.role === 'motorL' || part.role === 'wheelL') g = p.gl;
+      else if (part.role === 'motorR' || part.role === 'wheelR') g = p.gr;
+      else if (part.role === 'imu') g = p.imuGlow;
+      let glow = zero3;
+      if (g > 0.004) {
+        const base = part.role === 'imu' && !p.imu ? GLOW_ERROR : GLOW[part.role];
+        glow3[0] = base[0] * g; glow3[1] = base[1] * g; glow3[2] = base[2] * g;
+        glow = glow3;
+      }
+      gl.uniform3fv(loc.uColor, part.c);
+      gl.uniform3fv(loc.uGlow, glow);
+      gl.uniform1f(loc.uSpec, part.k);
+      gl.drawElements(pass ? gl.LINES : gl.TRIANGLES, range[1], gl.UNSIGNED_SHORT, range[0] * 2);
+    }
+  }
+
+  function draw() {
+    const p = twin.pose;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     matrices();
 
+    // 1) reflection of the robot in the floor (mirrored about z = 0, fading with depth)
+    gl.useProgram(prog);
+    gl.uniform1f(loc.uDim, 0.35 + 0.65 * p.dim);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    drawParts(0, true);
+
+    // 2) floor: dots, faint lines, contact shadow
     gl.useProgram(gprog);
     gl.enable(gl.BLEND);
     gl.depthMask(false);
+    gl.disable(gl.DEPTH_TEST);
     gl.uniformMatrix4fv(gloc.uVP, false, vp);
     gl.uniform1f(gloc.uScroll, -((p.wl + p.wr) / 2) * model.meta.dims.wheelR);
     gl.uniform1f(gloc.uDim, p.dim);
     gl.bindVertexArray(vaoGround);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.DEPTH_TEST);
     gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
 
+    // 3) the robot: faces, then feature edges
     gl.useProgram(prog);
-    gl.uniform1f(loc.uDim, 0.35 + 0.65 * p.dim);
-    for (let pass = 0; pass < 2; pass++) {                   // 0: faces, 1: feature edges
-      gl.bindVertexArray(pass ? vaoEdge : vaoTri);
-      gl.uniform1f(loc.uEdge, pass);
-      if (pass) { gl.enable(gl.BLEND); gl.disable(gl.POLYGON_OFFSET_FILL); }
-      else { gl.disable(gl.BLEND); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1); }
-      let node = -1;
-      for (const part of model.meta.parts) {
-        if (part.node !== node) {
-          node = part.node;
-          M4.mul(mv, nodeM[node], M4.scale(tmp, s));
-          M4.mul(mvp, vp, mv);
-          gl.uniformMatrix4fv(loc.uMVP, false, mvp);
-          gl.uniformMatrix4fv(loc.uMV, false, M4.mul(mv, view, mv));
-        }
-        let g = 0;
-        if (part.role === 'motorL' || part.role === 'wheelL') g = p.gl;
-        else if (part.role === 'motorR' || part.role === 'wheelR') g = p.gr;
-        else if (part.role === 'imu') g = p.imuGlow;
-        let glow = zero3;
-        if (g > 0.004) {
-          const base = part.role === 'imu' && !p.imu ? [1.0, 0.25, 0.25] : GLOW[part.role];
-          glow3[0] = base[0] * g; glow3[1] = base[1] * g; glow3[2] = base[2] * g;
-          glow = glow3;
-        }
-        gl.uniform3fv(loc.uColor, part.c);
-        gl.uniform3fv(loc.uGlow, glow);
-        gl.uniform1f(loc.uSpec, part.k);
-        const range = pass ? part.e : part.t;
-        if (range[1]) gl.drawElements(pass ? gl.LINES : gl.TRIANGLES, range[1], gl.UNSIGNED_SHORT, range[0] * 2);
-      }
-    }
+    gl.disable(gl.BLEND);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1, 1);
+    drawParts(0, false);
+    gl.enable(gl.BLEND);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    drawParts(1, false);
     gl.bindVertexArray(null);
     project();
   }
@@ -343,9 +378,24 @@ function Twin(canvas, opts) {
     }
   }
 
+  const VIEWS = { iso: twin.home, side: { az: -Math.PI / 2, el: 0.05 }, front: { az: 0, el: 0.1 }, top: { az: -Math.PI / 2, el: 1.35 } };
+  let goal = null;
+  twin.view = function (name) {
+    const v = VIEWS[name] || twin.home;
+    goal = { az: v.az, el: v.el, dist: twin.home.dist };
+    twin.viewName = name;
+  };
+
   twin.frame = function () {
     if (!twin.ready) return;
     resize();
+    if (goal) {
+      const c = twin.cam;
+      let d = goal.az - c.az;
+      d = Math.atan2(Math.sin(d), Math.cos(d));                    // shortest way round
+      c.az += d * 0.18; c.el += (goal.el - c.el) * 0.18; c.dist += (goal.dist - c.dist) * 0.18;
+      if (Math.abs(d) < 0.002 && Math.abs(goal.el - c.el) < 0.002) { c.az += d; c.el = goal.el; c.dist = goal.dist; goal = null; if (twin.onOrbitEnd) twin.onOrbitEnd(); }
+    }
     const p = twin.pose, c = twin.cam;
     const key = [p.pitch.toFixed(2), p.roll.toFixed(1), p.wl.toFixed(3), p.wr.toFixed(3), p.gl.toFixed(2), p.gr.toFixed(2),
       p.imu, p.dim.toFixed(2), c.az.toFixed(4), c.el.toFixed(4), c.dist.toFixed(1), canvas.width, canvas.height].join();
@@ -359,6 +409,7 @@ function Twin(canvas, opts) {
   let drag = null;
   canvas.addEventListener('pointerdown', e => {
     if (twin.mode !== 'webgl') return;
+    goal = null;
     drag = { x: e.clientX, y: e.clientY, az: twin.cam.az, el: twin.cam.el };
     canvas.setPointerCapture(e.pointerId);
   });
@@ -370,7 +421,7 @@ function Twin(canvas, opts) {
   const end = () => { if (drag) { drag = null; if (twin.onOrbitEnd) twin.onOrbitEnd(); } };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
-  canvas.addEventListener('dblclick', () => { Object.assign(twin.cam, twin.home); if (twin.onOrbitEnd) twin.onOrbitEnd(); });
+  canvas.addEventListener('dblclick', () => twin.view('iso'));
   canvas.addEventListener('wheel', e => {
     if (twin.mode !== 'webgl' || !e.ctrlKey && opts.orbit === 'horizontal') return;
     e.preventDefault();
@@ -397,6 +448,19 @@ function Twin(canvas, opts) {
     canvas.dataset.mode = '2d';
   }
   return twin;
+}
+
+// Camera preset buttons (Iso / Side / Front / Top) for a twin.
+function bindViews(box, twin) {
+  const mark = name => $$('button', box).forEach(b => b.classList.toggle('on', b.dataset.view === name));
+  box.addEventListener('click', e => {
+    const name = e.target.dataset.view;
+    if (!name) return;
+    twin.view(name);
+    mark(name);
+  });
+  twin.canvas.addEventListener('pointerdown', () => mark(''));       // a manual orbit is no preset
+  twin.canvas.addEventListener('dblclick', () => mark('iso'));
 }
 
 // Feeds a twin from the telemetry store. Shared by both pages so that the

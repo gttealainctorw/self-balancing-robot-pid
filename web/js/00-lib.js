@@ -1,9 +1,9 @@
 // Pure logic shared by both pages. No DOM access here: web/test/ loads this file in Node.
 
 // One telemetry sample as sent by the firmware: scaled integers, in this order.
-const FIELDS = ['t', 'pitch', 'target', 'rate', 'u', 'pwmL', 'pwmR', 'vEst', 'roll', 'yaw'];
-const SCALE = [0.001, 0.01, 0.01, 0.1, 1, 1, 1, 0.001, 0.01, 0.1];
-const UNITS = ['s', 'deg', 'deg', 'deg/s', 'PWM', 'PWM', 'PWM', 'fraction of full PWM', 'deg', 'deg/s'];
+const FIELDS = ['t', 'pitch', 'target', 'rate', 'u', 'pwmL', 'pwmR', 'vEst', 'roll', 'yaw', 'pTerm', 'iTerm', 'dTerm'];
+const SCALE = [0.001, 0.01, 0.01, 0.1, 1, 1, 1, 0.001, 0.01, 0.1, 1, 1, 1];
+const UNITS = ['s', 'deg', 'deg', 'deg/s', 'PWM', 'PWM', 'PWM', 'fraction of full PWM', 'deg', 'deg/s', 'PWM', 'PWM', 'PWM'];
 const SAT_PWM = 250;
 
 const Lib = {
@@ -63,12 +63,14 @@ const Lib = {
 
   toCsv(rows, meta) {
     const head = ['time_s', 'pitch_deg', 'target_deg', 'pitch_rate_dps', 'controller_output_pwm',
-      'left_motor_pwm', 'right_motor_pwm', 'speed_estimate', 'roll_estimate_deg', 'yaw_rate_dps'];
-    const digits = [3, 2, 2, 1, 0, 0, 0, 3, 2, 1];
+      'left_motor_pwm', 'right_motor_pwm', 'speed_estimate', 'roll_estimate_deg', 'yaw_rate_dps',
+      'p_term_pwm', 'i_term_pwm', 'd_term_pwm'];
+    const digits = [3, 2, 2, 1, 0, 0, 0, 3, 2, 1, 0, 0, 0];
+    const cols = rows.length ? rows[0].length : head.length;     // recordings made before the PID terms have 10 columns
     const t0 = rows.length ? rows[0][0] : 0;
     const lines = [];
     if (meta) lines.push('# ' + meta);
-    lines.push(head.join(','));
+    lines.push(head.slice(0, cols).join(','));
     for (const r of rows) {
       lines.push(r.map((v, i) => ((i ? v : v - t0) * SCALE[i]).toFixed(digits[i])).join(','));
     }

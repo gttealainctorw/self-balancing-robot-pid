@@ -36,6 +36,9 @@ PARAMS = dict(kp=45.0, ki=0.0, kd=0.6, dlpf=0.5, trim=0.0, ks=20.0, kis=0.0, vma
 LIMITS = dict(kp=(0, 500), ki=(0, 2000), kd=(0, 50), dlpf=(0, 0.98), trim=(-15, 15), ks=(0, 300),
               kis=(0, 200), vmax=(0, 1), tauv=(0.02, 5), lean=(0, 25), minpwm=(0, 200), db=(0, 60),
               turn=(0, 255), alpha=(0.9, 0.9995))
+HEART = [0, 30, 39, 45, 48, 49, 49, 48, 46, 41, 34, 25, 11, -5, -21, -36, -51, -65, -80, -96, -112, -127, -142, -156,
+         0, -24, -38, -53, -68, -84, -100, -115, -129, -144, -159, -176, -191, -205, -215, -221, -226, -229, -230,
+         -229, -228, -225, -219, -210, -180]      # same table as the firmware
 PLANT = dict(M=0.55, m=0.06, r=0.0325, l=0.07, Ib=0.0015, Jrot=2.8e-4, g=9.81, k_tau=0.013, k_b=0.287,
              tau_c=0.008, Vbat=7.4, Vdrop=2.0)
 
@@ -77,6 +80,10 @@ class SimRobot:
         self.tick_n = 0
         self.msgs = []
         self.kick = 0.0
+        self.term_p = self.term_d = 0.0
+        self.fig = 0                      # 0 none, 1 infinity, 2 heart
+        self.fig_s = self.fig_heading = 0.0
+        self.fig_seconds = 24.0
         self.report('Simulated robot ready')
 
     # -- helpers ------------------------------------------------------------
@@ -86,7 +93,37 @@ class SimRobot:
     def report(self, text):
         self.msgs.append(text)
 
+    def fig_target(self, s):
+        if self.fig == 1:
+            return 720 * s if s < 0.5 else 360 - 720 * (s - 0.5)
+        x = s * 48
+        i = int(x)
+        if i >= 48:
+            return HEART[48]
+        a, b = HEART[i], HEART[i + 1]
+        return a if abs(b - a) > 90 else a + (b - a) * (x - i)
+
+    def fig_step(self, dc, tc, now):
+        if not self.armed or self.mode != 'balancing':
+            self.fig = 0
+            self.report('Figure stopped')
+            return dc, tc
+        if now - self.last_cmd > 600:
+            return 0.0, 0.0
+        self.fig_heading += self.yaw_rate * DT
+        err = self.fig_target(self.fig_s) - self.fig_heading
+        away = abs(err)
+        pace = 1.0 if away < 12 else 0.0 if away > 40 else (40 - away) / 28
+        self.fig_s += pace * DT / self.fig_seconds
+        dc, tc = 0.45 * pace, clamp(-err * 0.04, -1, 1)
+        if self.fig_s >= 1:
+            self.fig = 0
+            self.report('Figure finished')
+            return 0.0, 0.0
+        return dc, tc
+
     def disarm(self):
+        self.fig = 0
         self.armed = False
         self.drive = self.turn = 0.0
 
@@ -135,6 +172,8 @@ class SimRobot:
         dc, tc = self.drive, self.turn
         if not self.armed or self.tune or now - self.last_cmd > 600:
             dc = tc = 0.0
+        if self.fig:
+            dc, tc = self.fig_step(dc, tc, now)
         self.drive_sm += clamp(dc - self.drive_sm, -1.5 * DT, 1.5 * DT)
         self.turn_sm += clamp(tc - self.turn_sm, -4 * DT, 4 * DT)
 
@@ -168,6 +207,8 @@ class SimRobot:
                         u = clamp(p['kp'] * (self.angle - self.tgt) + p['kd'] * self.rate_f, -255, 255)
                 else:
                     self.sat_ticks = 0
+                self.term_p = p['kp'] * (self.angle - self.tgt)
+                self.term_d = p['kd'] * self.rate_f
                 self.u = u
                 tr = self.turn_sm * p['turn']
                 pwm_l = self.friction_comp(u + tr)
@@ -226,9 +267,11 @@ class SimRobot:
         self.tick_n += 1
         if self.tick_n % SAMPLE_DIV == 0 and self.mode != 'calibrating':
             roll = random.gauss(0, 0.15)
+            run = self.mode == 'balancing'
             self.samples.append([now, round(self.angle * 100), round(self.tgt * 100), round(self.rate * 10),
                                  round(self.u), pwm_l, pwm_r, round(self.v_est * 1000), round(roll * 100),
-                                 round(self.yaw_rate * 10)])
+                                 round(self.yaw_rate * 10), round(self.term_p) if run else 0,
+                                 round(self.i_term) if run else 0, round(self.term_d) if run else 0])
             self.head += 1
             if len(self.samples) > 128:
                 del self.samples[:-128]
@@ -263,18 +306,22 @@ class SimRobot:
                         e=int(self.enabled), imu=int(self.imu), arm=int(self.armed), own=self.owner,
                         tune=int(self.tune), fall=int(self.fallen), rp=self.ramp_pwm, lu=540 + random.randint(0, 40),
                         up=self.millis() // 1000, st=1, pv=hash(json.dumps(self.p, sort_keys=True)) & 0xFFFF,
+                        fig=self.fig, fp=int(self.fig_s * 100) if self.fig else 0,
                         mq=mq, ms=self.msgs[mq - mcount:] if mcount else [])
 
     def joy(self, v, t, client):
         with self.lock:
             if self.armed and client and client == self.owner:
+                if self.fig and (abs(v) > 0.15 or abs(t) > 0.15):
+                    self.fig = 0
+                    self.report('Figure stopped: joystick moved')
                 self.drive = clamp(v, -1, 1)
                 self.turn = clamp(t, -1, 1)
                 self.last_cmd = self.millis()
 
     def state(self):
         with self.lock:
-            return dict(fw='2.0.0', ssid='BalanceBot-SIM', sim=1, loopHz=200, sampleHz=50, batt=0, imuAddr=104,
+            return dict(fw='2.1.0', ssid='BalanceBot-SIM', sim=1, loopHz=200, sampleHz=50, batt=0, imuAddr=104,
                         fallAngle=40, p=dict(self.p, invl=self.invl, invr=self.invr))
 
     def command(self, line, client):
@@ -309,6 +356,17 @@ class SimRobot:
             if cmd == 'disarm':
                 self.disarm()
                 return 'Drive locked'
+            if cmd == 'fig':
+                kind = 2 if arg == 'heart' else 1 if (arg or '').startswith('inf') else 0
+                if not kind:
+                    self.fig = 0
+                    return 'Figure stopped'
+                if not self.armed or self.owner != client or self.mode != 'balancing':
+                    return 'Cannot start: the robot must be balancing and driving armed by you'
+                self.fig_seconds = clamp(float(words[2]), 8, 120) if len(words) > 2 else 24.0
+                self.fig_s = self.fig_heading = 0.0
+                self.fig = kind
+                return 'Drawing a heart: give it about 1.5 m of clear floor' if kind == 2 else 'Drawing an infinity: give it about 1.5 m of clear floor'
             if cmd in ('autotune', 'at'):
                 self.tune = not (arg in ('stop', 'off', '0'))
                 if self.tune:
@@ -394,8 +452,6 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
         arg = lambda k, d='0': q.get(k, [d])[0]
-        if url.path == '/':
-            return self.reply(302, 'text/plain', b'', [('Location', '/control')])
         if url.path in ('/t', '/j', '/c', '/s'):
             if self.robot is None:
                 return self.proxy()
@@ -411,7 +467,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, 'application/json', body.encode(), no_store)
         assets = build_web.build()
         for i, a in enumerate(assets):
-            if url.path == a['path'] or (i == 0 and url.path == '/statistics'):
+            if url.path == a['path'] or (i == 0 and url.path in ('/', '/control', '/statistics')):
                 headers = [('Cache-Control', 'public, max-age=31536000, immutable' if a['immutable'] else 'no-cache')]
                 if a['gzip']:
                     headers.append(('Content-Encoding', 'gzip'))
@@ -439,7 +495,7 @@ def main():
         Handler.robot = SimRobot()
         threading.Thread(target=Handler.robot.run, daemon=True).start()
         print('Simulated robot (no hardware involved)')
-    print('Open http://localhost:%d/control and http://localhost:%d/statistics' % (args.port, args.port))
+    print('Open http://localhost:%d/  (cover), /control and /statistics' % args.port)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
