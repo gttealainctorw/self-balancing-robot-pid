@@ -122,3 +122,26 @@ Sources: [Mozilla Hacks, "Securing Gamepad API"](https://hacks.mozilla.org/2020/
 | Tests | `node --test` for pure logic, Python dev server with a simulated robot, browser checks | No new runtime dependency |
 
 New runtime dependencies added to the project: **none**. Build-time tools: Python 3 (standard library only). Fonts were subset once with `fonttools`.
+
+## H. Second pass (2026-11-15): charts, typography, cover
+
+**Charts.** Tools built for inspecting telemetry share a small set of conventions, and the first version of the Statistics page followed none of them (it was a grid of separate cards). What was adopted:
+
+| Convention | Seen in | Implemented as |
+|---|---|---|
+| Cursor shared by all panels, keyed by time and not by pixel | [Grafana shared crosshair](https://answers.splunk.com/answers/392159/index.html), [F1Laps telemetry](https://www.f1laps.com/blog/telemetry-synchronized-cursor-charts/), [ZingChart shared interactions](https://docs.zingchart.com/tutorials/features/shared-interactions) | One `ChartView` object holds the cursor time; every chart reads its value at that time |
+| Stacked rows with one time axis | Oscilloscopes, PlotJuggler, [Sift time-series panel](https://www.siftstack.com/mission-critical/open-zoom-share-the-time-series-panel-in-sift) | A single bordered panel of rows; only the last row carries time labels |
+| Pause before inspecting; X zoom separate from pan | [Zelos plot panel](https://zelos-docs.pages.dev/app/panels/plot-panel/), Sift | Pause freezes the right edge while data keeps buffering; drag pans, wheel zooms the window; double-click returns to live |
+| No interpolation across missing data | General practice in engineering plots | The line is lifted when two samples are more than 100 ms apart |
+| Stable vertical scale | Oscilloscope auto-range with hold | The range grows immediately and shrinks slowly |
+| Limits drawn on the plot | Control-room displays | Dashed reference lines at the ±255 PWM limit |
+
+The renderer stays custom (about 4 kB gzip). uPlot remains the documented alternative; its cursor-sync API was not needed once the view object existed.
+
+**PID chart.** The proportional, integral and derivative terms are now part of each telemetry sample, computed by the firmware in the control step, so the chart shows what the controller actually added up rather than a reconstruction in the browser.
+
+**Typography.** Geist was replaced because it is the default of many generated interfaces and gave the app that look. Eight open-licence families were rendered side by side in a specimen sheet with the app's own strings (a light headline, numeric read-outs, small caps labels): Hanken Grotesk, Host Grotesk, Instrument Sans, Schibsted Grotesk, Red Hat Mono, DM Mono, IBM Plex Mono and Azeret Mono. Chosen: **Hanken Grotesk** (closest to the light grotesque of the cover artwork) and **Red Hat Mono** (a light, open monospace with clear numerals). Both are OFL-1.1, from [google/fonts](https://github.com/google/fonts); weight ranges were trimmed and the files subset to Latin: 27 kB + 19 kB.
+
+**Visual language.** Taken from the cover artwork rather than from a component kit: white pills for what can be pressed, a dark pill for navigation, a light headline with a second clause in grey, monospace uppercase micro-labels. Panels are flat with hairlines; translucent material is kept only for elements that float over the twin. Violet is used for live data and armed states only.
+
+**Cover.** The supplied artwork is used unmodified as the cover (`/`), with transparent link areas over its own navigation and buttons, so it is pixel-identical to the file. It is 133 kB and is requested only by the cover page.

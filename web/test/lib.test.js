@@ -57,6 +57,10 @@ test('CSV has one line per sample, a header and time from zero', () => {
   assert.ok(lines[1].startsWith('time_s,pitch_deg,target_deg'));
   assert.equal(lines[2], '0.000,1.86,0.00,1.2,-40,-38,-42,0.015,0.03,-0.7');
   assert.equal(lines[3].split(',')[0], '0.020');
+  // samples with the PID terms get three more columns
+  const pid = Lib.toCsv([[5000, 186, 0, 12, -40, -38, -42, 15, 3, -7, -52, 4, 8]]).trim().split('\n');
+  assert.ok(pid[0].endsWith('yaw_rate_dps,p_term_pwm,i_term_pwm,d_term_pwm'));
+  assert.ok(pid[1].endsWith('-0.7,-52,4,8'));
 });
 
 test('axis ticks are round numbers inside the range', () => {

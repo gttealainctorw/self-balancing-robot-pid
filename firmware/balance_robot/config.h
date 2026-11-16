@@ -49,6 +49,9 @@
 #define CMD_TIMEOUT_MS   600        // no app command for this long => joystick back to 0
 #define DRIVE_DISARM_MS  2000       // no command from the armed client for this long => drive locks again
 #define TELEMETRY_HZ     50         // samples per second sent to the web app (divides LOOP_HZ)
+#define FIG_SECONDS      24         // default time to draw a figure (heart, infinity)
+#define FIG_DRIVE        0.45f      // forward command while drawing (fraction of full stick)
+#define FIG_TURN_GAIN    0.04f      // turn command per degree of heading error
 #define SAT_PWM          250.0f     // |PWM| at or above this counts as saturated
 #define SOFT_START_MS    1500       // the speed loop fades in over this time after starting
 #define LATCH_MS         250        // saturated this long while nearly upright => reset speed loop

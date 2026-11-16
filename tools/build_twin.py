@@ -135,8 +135,8 @@ PARTS = []     # dicts: name, node, role, color, spec, mesh
 STATS = {}
 
 
-def part(name, mesh, color, node=NODE_BODY, role='', spec=0.25):
-    PARTS.append(dict(name=name, node=node, role=role, color=color, spec=spec, mesh=mesh))
+def part(name, mesh, color, node=NODE_BODY, role='', spec=0.25, edges=True):
+    PARTS.append(dict(name=name, node=node, role=role, color=color, spec=spec, mesh=mesh, edges=edges))
 
 
 def rgb(hex_):
@@ -163,21 +163,40 @@ def build_decks():
         part(name[:-4], mesh, DECK, spec=0.18)
 
 
+def build_screws():
+    """M3 screw heads on the four post positions of the top deck (STL (+-63, +-38))."""
+    heads = Mesh()
+    z = TOP_Z + 3.0 + LIFT
+    for sx in (-63.0, 63.0):
+        for sy in (-38.0, 38.0):
+            heads.add(move(y_to_z(cyl_y(2.8, 0.0, 1.8, 12)), (sy, -sx, z)))
+    part('deck-screws', heads, STEEL, spec=0.8)
+
+
 def build_wheel(side):
     """side = +1 left wheel (outer face toward +y), -1 right wheel. Local frame."""
     node = NODE_WHEEL_L if side > 0 else NODE_WHEEL_R
     role = 'wheelL' if side > 0 else 'wheelR'
     h = WHEEL_W / 2
-    tire = lathe([(25.5, -h), (30.5, -h), (WHEEL_R, -h + 2.5), (WHEEL_R, h - 2.5), (30.5, h), (25.5, h)], 44)
+    carcass = WHEEL_R - 1.6                # the tread blocks stand 1.6 mm proud of the carcass
+    tire = lathe([(25.5, -h), (carcass - 2.0, -h), (carcass, -h + 2.5), (carcass, h - 2.5), (carcass - 2.0, h), (25.5, h)], 44)
+    tread = Mesh()                         # two staggered rows of blocks, as on the reference wheel
+    for k in range(26):
+        for row, shift in ((-5.3, 0.0), (5.3, 0.5)):
+            block = box((carcass + 0.4, row, 0.0), (2.4, 8.6, 4.6))
+            tread.add(rot_y(block, (k + shift) * 360.0 / 26))
     rim = lathe([(21.0, -11.0), (25.5, -11.0), (25.5, 11.0), (21.0, 11.0)], 44)
     rim.add(cyl_y(6.5, -9.0, 11.5, 20))
+    nut = cyl_y(3.2, 11.5, 13.6, 6)
     for k in range(5):                       # five spokes, as on the reference wheel
         rim.add(rot_y(box((13.5, 6.5, 0.0), (17.0, 5.0, 7.0)), 72.0 * k + 18.0))
     back = cyl_y(21.5, -7.0, -5.5, 32)
-    for m in (tire, rim, back):
+    for m in (tire, tread, rim, back, nut):
         if side < 0:
             m.map(lambda p: (p[0], -p[1], p[2]))
     part('tire', tire, RUBBER, node, role, spec=0.08)
+    part('tread', tread, RUBBER, node, role, spec=0.05, edges=False)
+    part('hub-nut', nut, STEEL, node, role, spec=0.8)
     part('rim', rim, AMBER, node, role, spec=0.35)
     part('wheel-back', back, BLACK, node, role, spec=0.1)
 
@@ -282,6 +301,7 @@ def feature_edges(verts, tris):
 
 def main():
     build_decks()
+    build_screws()
     for side in (1, -1):
         build_motor(side)
         build_wheel(side)
@@ -292,7 +312,7 @@ def main():
     pos, tri, edge, meta = [], [], [], []
     for p in PARTS:
         verts, tris = weld(p['mesh'])
-        edges = feature_edges(verts, tris)
+        edges = feature_edges(verts, tris) if p['edges'] else []
         base = len(pos) // 3
         for v in verts:
             pos += v
